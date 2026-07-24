@@ -168,5 +168,22 @@ ok("gate never empties the menu when the recommendation is infeasible here", {
   stopifnot(setequal(gate_choices(c("ols", "ridge"), "logistic", TRUE),
                      c("ols", "ridge")))
 })
+ok("plan_test_designs maps tests to design keys and gates the Design selector", {
+  # p_repeat lists rm_anova + mixed_anova + pearson -> paired_repeated, mixed, standard
+  stopifnot(setequal(plan_test_designs(p_repeat),
+                     c("paired_repeated", "mixed", "standard")))
+  loc_designs <- c("one_sample", "two_independent", "multi_independent",
+                   "paired_repeated", "factorial", "mixed", "ancova")
+  stopifnot(
+    setequal(gate_choices(loc_designs, plan_test_designs(p_repeat), TRUE),
+             c("paired_repeated", "mixed")),                       # narrowed
+    setequal(gate_choices(loc_designs, plan_test_designs(p_repeat), FALSE),
+             loc_designs),                                         # override keeps all
+    setequal(gate_choices(loc_designs, plan_test_designs(NULL), TRUE),
+             loc_designs))                                         # no plan -> all
+  # a chi-square plan narrows the categorical design to 'association'
+  stopifnot(setequal(gate_choices(c("association", "repeated_binary"),
+                                  plan_test_designs(good), TRUE), "association"))
+})
 
 report_and_exit()

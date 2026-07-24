@@ -85,6 +85,35 @@ valid_subject_vars <- function(types, outcome = NULL) {
   setdiff(nm, outcome)
 }
 
+#' Which location designs the current variables can actually support.
+#'
+#' This is the idiot-proof base gate: a design is offered only when the data
+#' has the variables it needs (a two-level group for a two-group test, a >=3
+#' level group for a one-way ANOVA, two factors for a factorial design, a
+#' covariate for ANCOVA, repeated structure for paired/mixed). It is
+#' deliberately OUTCOME-INDEPENDENT so choosing an outcome does not reset the
+#' design menu. `reserved` are columns not usable as ordinary test variables.
+feasible_location_designs <- function(types, df, panel = NULL, reserved = character(0)) {
+  tp <- types[intersect(setdiff(names(types), reserved), names(df))]
+  n_num   <- sum(vapply(tp, is_numeric_type, logical(1)))
+  cats2   <- length(valid_factor_vars(tp, df))                       # >= 2-level cats
+  n_two   <- length(valid_grouping_vars(tp, df, "two_independent"))  # exactly 2 levels
+  n_multi <- length(valid_grouping_vars(tp, df, "multi_independent"))# >= 3 levels
+  cats    <- names(tp)[vapply(tp, is_categorical_type, logical(1))]
+  within_ok <- length(unique(c(intersect(panel$time %||% character(0), names(df)), cats))) > 0
+  subj_ok   <- length(valid_subject_vars(tp)) > 0
+
+  out <- character(0)
+  if (n_num  >= 1) out <- c(out, "one_sample")
+  if (n_two  >= 1) out <- c(out, "two_independent")
+  if (n_multi >= 1) out <- c(out, "multi_independent")
+  if (cats2  >= 2) out <- c(out, "factorial")
+  if (cats2  >= 1 && n_num >= 2) out <- c(out, "ancova")
+  if (within_ok && subj_ok) out <- c(out, "paired_repeated")
+  if (within_ok && subj_ok && cats2 >= 1) out <- c(out, "mixed")
+  out
+}
+
 #' Validate a fully-specified test spec BEFORE running, raising human-readable
 #' errors for impossible role combinations (replaces raw stopifnot() failures).
 validate_spec <- function(df, spec) {

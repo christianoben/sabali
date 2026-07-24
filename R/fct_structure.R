@@ -26,9 +26,13 @@ analysis_layout_kind <- function(panel) {
 }
 
 # --- Which methods are RECOMMENDED (valid) for a layout kind ----------------
-# Each returns the allowed subset, or NULL meaning "no restriction" (offer all).
-# Independence-assuming methods are dropped for repeated / time-series data;
-# users can still reveal them with an "include un-recommended analyses" toggle.
+# These encode the STUDY-DESIGN gate driven by the Data-tab layout choice; the
+# AI-plan gate (fct_planner.R) stacks on top of whatever these return. Each
+# returns the allowed subset, or NULL meaning "no restriction". Designs that
+# assume a particular layout are dropped BOTH ways: independence-assuming
+# designs are dropped for repeated / time-series data, and within-subject
+# designs (paired/repeated, mixed-model) are dropped for cross-sectional data.
+# The "include un-recommended analyses" toggle reveals the full menu.
 recommended_test_families <- function(kind) {
   switch(kind %||% "cross_sectional",
     repeated    = c("location", "categorical", "correlation", "cochran_q"),
@@ -36,7 +40,14 @@ recommended_test_families <- function(kind) {
     NULL)
 }
 recommended_location_designs <- function(kind) {
-  if (identical(kind, "repeated")) c("paired_repeated", "mixed") else NULL
+  switch(kind %||% "cross_sectional",
+    # Within-subject designs only (repeated measures over conditions/time).
+    repeated    = c("paired_repeated", "mixed"),
+    time_series = character(0),
+    # Cross-sectional: independent-observation designs only. Paired/repeated and
+    # mixed-model designs need repeated within-subject data, so they are not
+    # offered for one-row-per-subject data (revealable via the override).
+    c("one_sample", "two_independent", "multi_independent", "factorial", "ancova"))
 }
 recommended_cat_designs <- function(kind) {
   if (identical(kind, "repeated")) "repeated_binary" else NULL

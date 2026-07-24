@@ -310,6 +310,27 @@ plan_test_families <- function(plan) {
   unique(unname(PLANNER_TEST_FAMILY[ids[ids %in% names(PLANNER_TEST_FAMILY)]]))
 }
 
+# catalogue test id -> Tests-tab DESIGN key (the sub-choice within a family:
+# location / categorical / correlation designs). Lets the AI-plan gate narrow
+# the design selector the same way it narrows the family selector.
+PLANNER_TEST_DESIGN <- c(
+  one_sample_t = "one_sample",
+  welch_t = "two_independent", mann_whitney = "two_independent",
+  one_way_anova = "multi_independent", kruskal = "multi_independent",
+  paired_t = "paired_repeated", wilcoxon = "paired_repeated",
+  rm_anova = "paired_repeated", friedman = "paired_repeated",
+  factorial_anova = "factorial", mixed_anova = "mixed", ancova = "ancova",
+  chi_square = "association", fisher_exact = "association",
+  mcnemar = "repeated_binary", cochran_q = "repeated_binary",
+  pearson = "standard", spearman = "standard", rm_correlation = "repeated")
+
+#' Tests-tab design keys implied by a plan's tests (used to gate the design
+#' selector on top of the layout gate, mirroring plan_test_families()).
+plan_test_designs <- function(plan) {
+  ids <- plan_test_ids(plan)
+  unique(unname(PLANNER_TEST_DESIGN[ids[ids %in% names(PLANNER_TEST_DESIGN)]]))
+}
+
 #' The standard regression method id a plan recommends ("" -> none / advanced).
 plan_regression_id <- function(plan) {
   if (is.null(plan)) return(character(0))

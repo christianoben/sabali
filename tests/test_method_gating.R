@@ -163,8 +163,28 @@ ok("recommended_test_families drops independence families for repeated/time seri
 ok("recommended location/correlation designs for repeated are within-subject", {
   stopifnot(setequal(recommended_location_designs("repeated"), c("paired_repeated", "mixed")),
             identical(recommended_corr_designs("repeated"), "repeated"),
-            identical(recommended_cat_designs("repeated"), "repeated_binary"),
-            is.null(recommended_location_designs("cross_sectional")))
+            identical(recommended_cat_designs("repeated"), "repeated_binary"))
+})
+ok("cross-sectional location designs are independence-based (no paired/mixed)", {
+  cs <- recommended_location_designs("cross_sectional")
+  stopifnot(setequal(cs, c("one_sample", "two_independent", "multi_independent",
+                           "factorial", "ancova")),
+            !("paired_repeated" %in% cs), !("mixed" %in% cs))
+})
+ok("feasible_location_designs offers only designs the variables can support", {
+  # only a numeric outcome -> just one_sample
+  d1 <- data.frame(y = rnorm(30)); ty1 <- c(y = "continuous")
+  stopifnot(setequal(feasible_location_designs(ty1, d1), "one_sample"))
+  # numeric + a 2-level group -> one_sample + two_independent only
+  d2 <- data.frame(y = rnorm(30), g = factor(rep(c("A", "B"), 15)))
+  f2 <- feasible_location_designs(c(y = "continuous", g = "binary"), d2)
+  stopifnot("two_independent" %in% f2, "one_sample" %in% f2,
+            !("multi_independent" %in% f2), !("factorial" %in% f2), !("ancova" %in% f2))
+  # two numerics + a 3-level factor -> multi_independent and ancova, but not factorial (one factor)
+  d3 <- data.frame(y = rnorm(30), x = rnorm(30), g = factor(rep(c("A", "B", "C"), 10)))
+  f3 <- feasible_location_designs(c(y = "continuous", x = "continuous", g = "nominal"), d3)
+  stopifnot("multi_independent" %in% f3, "ancova" %in% f3,
+            !("factorial" %in% f3), !("two_independent" %in% f3))
 })
 ok("independent regression recommended only for cross-sectional", {
   stopifnot(regression_recommended_for("cross_sectional"),
@@ -184,11 +204,12 @@ rpanel <- list(kind = "repeated", id = "id", time = "visit")
 vals_in <- function(html, v) grepl(sprintf('value="%s"', v), html, fixed = TRUE)
 # NB: parameter is `expand`, not `show_all` - the latter is the module's own
 # reactive and would be shadowed inside the testServer block.
-tests_ui_html <- function(out_name, expand = FALSE, set_family = NULL) {
+tests_ui_html <- function(out_name, expand = FALSE, set_family = NULL,
+                          data = rd, types = rtypes, panel = rpanel) {
   h <- NULL
   shiny::testServer(mod_tests_server,
-    args = list(data = reactive(rd), types = reactive(rtypes),
-                outcomes = reactive(character(0)), panel = reactive(rpanel),
+    args = list(data = reactive(data), types = reactive(types),
+                outcomes = reactive(character(0)), panel = reactive(panel),
                 add_report = function(x) NULL), {
       if (!is.null(set_family)) session$setInputs(family = set_family)
       if (isTRUE(expand)) session$setInputs(show_all = TRUE)
@@ -198,6 +219,11 @@ tests_ui_html <- function(out_name, expand = FALSE, set_family = NULL) {
     })
   h
 }
+
+# cross-sectional fixture (one row per subject) for the study-design gate
+cs_d <- data.frame(y = rnorm(60), g = factor(sample(c("A", "B"), 60, TRUE)))
+cs_types <- c(y = "continuous", g = "binary")
+cs_panel <- list(kind = "cross_sectional")
 
 cat("\n== Tests tab: repeated hides independence families/designs by default ==\n")
 ok("family radio excludes proportion & point-biserial for repeated data", {
@@ -216,6 +242,19 @@ ok("location designs are within-subject only by default (no two_independent)", {
 ok("un-recommended toggle restores the independent designs", {
   h <- tests_ui_html("controls", expand = TRUE, set_family = "location")
   stopifnot(vals_in(h, "two_independent"), vals_in(h, "one_sample"))
+})
+
+cat("\n== Tests tab: cross-sectional hides within-subject designs by default ==\n")
+ok("cross-sectional location designs exclude paired/repeated and mixed", {
+  h <- tests_ui_html("controls", set_family = "location",
+                     data = cs_d, types = cs_types, panel = cs_panel)
+  stopifnot(vals_in(h, "two_independent"), vals_in(h, "one_sample"),
+            !vals_in(h, "paired_repeated"), !vals_in(h, "mixed"))
+})
+ok("override restores within-subject designs for cross-sectional", {
+  h <- tests_ui_html("controls", expand = TRUE, set_family = "location",
+                     data = cs_d, types = cs_types, panel = cs_panel)
+  stopifnot(vals_in(h, "paired_repeated"), vals_in(h, "mixed"))
 })
 
 cat("\n== Regression tab: gated off for repeated data, escape hatch works ==\n")

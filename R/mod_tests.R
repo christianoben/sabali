@@ -309,9 +309,22 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
           "Two or three crossed factors (factorial ANOVA)" = "factorial",
           "Between × within mixed-model ANOVA" = "mixed",
           "Compare groups adjusting for a covariate (ANCOVA)" = "ancova")
-        rec_designs <- if (!show_all()) recommended_location_designs(test_kind()) else NULL
-        design_choices <- if (is.null(rec_designs)) all_designs
-                          else all_designs[all_designs %in% rec_designs]
+        # Design menu = three composed gates, base to top:
+        #  1) DATA FEASIBILITY (idiot-proof, always): only designs the current
+        #     variables can support.
+        #  2) STUDY DESIGN (Data-tab layout), unless the layout override.
+        #  3) AI PLAN, unless its own override. gate_choices never empties.
+        feas <- feasible_location_designs(analysis_types(), data(), panel_spec(), reserved())
+        design_choices <- all_designs[all_designs %in% feas]
+        if (!show_all()) {
+          rec_designs <- recommended_location_designs(test_kind())
+          if (!is.null(rec_designs))
+            design_choices <- design_choices[unname(design_choices) %in% rec_designs]
+        }
+        keep <- gate_choices(unname(design_choices), plan_test_designs(plan_now()), ai_gate_on())
+        design_choices <- design_choices[unname(design_choices) %in% keep]
+        if (!length(design_choices))         # never leave the menu empty
+          design_choices <- all_designs[all_designs %in% "one_sample"]
         shiny::tagList(
           shiny::selectInput(ns("outcome"), "Numeric outcome", choices = location_outcomes()),
           shiny::radioButtons(ns("design"), "Design", choices = design_choices),
@@ -356,6 +369,9 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
         rec_cat <- if (!show_all()) recommended_cat_designs(test_kind()) else NULL
         if (!is.null(rec_cat) && any(cat_design_choices %in% rec_cat))
           cat_design_choices <- cat_design_choices[cat_design_choices %in% rec_cat]
+        keep_cat <- gate_choices(unname(cat_design_choices),
+                                 plan_test_designs(plan_now()), ai_gate_on())
+        cat_design_choices <- cat_design_choices[unname(cat_design_choices) %in% keep_cat]
         selected_cat_design <- if (!is.null(input$cat_design) &&
                                    input$cat_design %in% unname(cat_design_choices))
           input$cat_design else "association"
@@ -419,6 +435,9 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
             rec_corr <- if (!show_all()) recommended_corr_designs(test_kind()) else NULL
             if (!is.null(rec_corr) && any(corr_design_choices %in% rec_corr))
               corr_design_choices <- corr_design_choices[corr_design_choices %in% rec_corr]
+            keep_corr <- gate_choices(unname(corr_design_choices),
+                                      plan_test_designs(plan_now()), ai_gate_on())
+            corr_design_choices <- corr_design_choices[unname(corr_design_choices) %in% keep_corr]
             selected_corr_design <- if (!is.null(input$corr_design) &&
                                         input$corr_design %in% unname(corr_design_choices))
               input$corr_design else "standard"
