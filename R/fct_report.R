@@ -130,7 +130,7 @@ tableone_flextable <- function(t1) {
   ft <- flextable::font(ft, fontname = "Calibri", part = "all")
   ft <- flextable::fontsize(ft, size = 10, part = "all")
 
-  bold_rows <- which(t1$row_kind %in% c("cont", "cat_header"))
+  bold_rows <- which(t1$row_kind %in% c("cont", "cat_header", "meta"))
   if (length(bold_rows))
     ft <- flextable::bold(ft, i = bold_rows, j = 1, part = "body")
   level_rows <- which(t1$row_kind == "cat_level")

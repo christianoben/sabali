@@ -97,4 +97,42 @@ ok("auto continuous style follows a rank-based recommended test", {
   stopifnot(any(grepl("Median \\[IQR\\]", t1$table$Characteristic)))
 })
 
+# --- repeated-measures extensions ------------------------------------------
+rm_df <- data.frame(
+  id = rep(1:4, each = 3),
+  visit = rep(c("Baseline", "6 months", "12 months"), 4),
+  sex = rep(c("F", "M", "F", "M"), each = 3),
+  score = c(10, 20, 30, 12, 22, 32, NA, 24, 34, 14, 26, 36),
+  stringsAsFactors = FALSE)
+rm_types <- c(score = "continuous", sex = "binary", visit = "nominal")
+
+ok("tableone_baseline picks each subject's first (data-order) row", {
+  b <- tableone_baseline(rm_df, "id", "visit")
+  stopifnot(nrow(b) == 4L, all(b$visit == "Baseline"),
+            identical(b$score, c(10, 12, NA, 14)))
+})
+
+ok(".t1_time_order sorts numeric/date but keeps label appearance order", {
+  stopifnot(identical(.t1_time_order(rm_df$visit),
+                      c("Baseline", "6 months", "12 months")))
+  stopifnot(identical(.t1_time_order(c(12, 0, 6, 0)), c("0", "6", "12")))
+})
+
+ok("evolution table: chronological columns, no p, retention + missing rows", {
+  t <- build_table_one(rm_df, "score", strata = "visit", types = rm_types,
+        opts = list(show_p = FALSE, cont_style = "mean_sd", show_overall = FALSE,
+                    show_missing = TRUE, retention = TRUE,
+                    strata_order = .t1_time_order(rm_df$visit)))
+  stopifnot(isFALSE(t$has_p), !("p" %in% names(t$table)))
+  stopifnot(identical(t$col_names, c("Baseline", "6 months", "12 months")))
+  stopifnot("meta" %in% t$row_kind,
+            any(grepl("^Participants", t$table$Characteristic)))
+  # baseline score mean over non-missing (10,12,14) = 12.00 (2.00)
+  i <- match("score, M (SD)", t$table$Characteristic)
+  stopifnot(grepl("^12\\.00 ", t$table$Baseline[i]))
+  # continuous Missing row: one missing at baseline
+  mi <- which(t$table$Characteristic == "Missing")[1]
+  stopifnot(identical(t$table$Baseline[mi], "1"))
+})
+
 report_and_exit()

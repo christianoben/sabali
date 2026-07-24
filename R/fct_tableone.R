@@ -121,10 +121,19 @@ build_table_one <- function(df, vars, strata = NULL, types = NULL, opts = list()
   }
   has_p <- has_split && isTRUE(show_p)
 
-  # Column definitions: named list of row-index vectors.
+  # Column definitions: named list of row-index vectors. When a strata_order is
+  # supplied (e.g. chronological visits) the columns follow it; otherwise the
+  # factor levels are used.
   cols <- list()
   if (show_overall || !has_split) cols[["Overall"]] <- which(rep(TRUE, nrow(df)))
-  if (has_split) for (lv in levels(sf)) cols[[lv]] <- which(!is.na(sf) & sf == lv)
+  if (has_split) {
+    lv_order <- levels(sf)
+    if (!is.null(opts$strata_order)) {
+      ord <- intersect(as.character(opts$strata_order), lv_order)
+      lv_order <- c(ord, setdiff(lv_order, ord))
+    }
+    for (lv in lv_order) cols[[lv]] <- which(!is.na(sf) & sf == lv)
+  }
   col_names <- names(cols)
   col_headers <- vapply(col_names, function(nm)
     sprintf("%s\n(n = %d)", nm, length(cols[[nm]])), character(1))
@@ -140,6 +149,17 @@ build_table_one <- function(df, vars, strata = NULL, types = NULL, opts = list()
     p_col[[length(p_col) + 1L]]         <<- p_text
   }
 
+  # Optional attrition/retention row (repeated-measures "over time" tables):
+  # participants assessed in each column, as a percentage of the first column.
+  if (isTRUE(opts$retention) && length(col_names) >= 1L) {
+    base_n <- length(cols[[col_names[1]]])
+    cells <- vapply(col_names, function(nm) {
+      n <- length(cols[[nm]])
+      if (base_n > 0) sprintf("%d (%.0f%%)", n, 100 * n / base_n) else as.character(n)
+    }, character(1))
+    push_row("Participants, n (% of first column)", cells, "meta", "")
+  }
+
   for (v in vars) {
     tp <- types[[v]] %||% "nominal"
     x <- df[[v]]
@@ -153,6 +173,11 @@ build_table_one <- function(df, vars, strata = NULL, types = NULL, opts = list()
       cells <- vapply(col_names, function(nm)
         .t1_fmt_cont(.t1_num(x)[cols[[nm]]], style, digits), character(1))
       push_row(label, cells, "cont", ptxt)
+      if (show_missing) {
+        miss <- vapply(col_names, function(nm)
+          as.character(sum(!is.finite(.t1_num(x)[cols[[nm]]]))), character(1))
+        push_row("Missing", miss, "cat_level", "")
+      }
     } else {
       xf <- as.factor(x)
       levs <- levels(droplevels(xf))
@@ -182,17 +207,47 @@ build_table_one <- function(df, vars, strata = NULL, types = NULL, opts = list()
                         check.names = FALSE, stringsAsFactors = FALSE)
   if (has_p) display[["p"]] <- p_col
 
+  note_txt <- .t1_note(tests_used, has_p, cont_style, strata, has_split)
+  if (isTRUE(opts$retention))
+    note_txt <- paste(note_txt,
+      "The first row is the number of participants assessed at each time point (percentage relative to the first column); declining counts reflect attrition or missed visits.")
+
   list(
     table = display,
-    row_kind = rows_kind,          # cont | cat_header | cat_level (for indenting/bold)
+    row_kind = rows_kind,          # meta | cont | cat_header | cat_level (indent/bold)
     columns = col_headers,         # display headers with N (parallel to col_names)
     col_names = col_names,
     has_p = has_p,
     strata = if (has_split) strata else NULL,
     title = opts$title %||% "Participant characteristics",
-    note = .t1_note(tests_used, has_p, cont_style, strata, has_split),
+    note = note_txt,
     tests_used = tests_used,
     apa = TRUE)
+}
+
+# Chronological order of a time/visit variable. Numeric or date times sort
+# naturally; labelled visits ("Baseline", "6 months", ...) have no sortable
+# order, so we use their order of first appearance in the data - long-format
+# panel data is stored chronologically within subject by convention.
+.t1_time_order <- function(x) {
+  if (inherits(x, c("Date", "POSIXct", "POSIXt")) || is.numeric(x))
+    as.character(sort(unique(x[!is.na(x)])))
+  else
+    unique(as.character(x[!is.na(x)]))
+}
+
+# One row per subject at their earliest time point (baseline). For numeric/date
+# times this is the minimum; for labelled visits it is the subject's first row
+# in data order (the chronological convention above).
+tableone_baseline <- function(df, id, time) {
+  if (is.null(id) || is.null(time) || !all(c(id, time) %in% names(df)))
+    stop("A baseline table needs the subject-ID and time columns (declare them on the Data tab).",
+         call. = FALSE)
+  tx <- df[[time]]
+  ord <- if (inherits(tx, c("Date", "POSIXct", "POSIXt")) || is.numeric(tx))
+    order(df[[id]], tx) else order(df[[id]])   # order() is stable -> keeps data order
+  d <- df[ord, , drop = FALSE]
+  d[!duplicated(d[[id]]), , drop = FALSE]
 }
 
 # Footnote text: statistic definitions, and (when split) the tests used.

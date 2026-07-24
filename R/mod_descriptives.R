@@ -55,15 +55,14 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
       k
     })
 
-    # Two modes on the Descriptives tab. "Summary table (Table 1)" is offered
-    # ONLY for cross-sectional data (the pilot scope); every other layout keeps
-    # the single-variable behaviour unchanged.
+    # The Summary-table mode is offered for cross-sectional and repeated-measures
+    # data; time-series and survival layouts keep the single-variable behaviour.
     mode <- shiny::reactive({
-      if (!identical(kind(), "cross_sectional")) return("single")
+      if (!kind() %in% c("cross_sectional", "repeated")) return("single")
       input$desc_mode %||% "single"
     })
     output$mode_ui <- shiny::renderUI({
-      if (!identical(kind(), "cross_sectional")) return(NULL)
+      if (!kind() %in% c("cross_sectional", "repeated")) return(NULL)
       shiny::radioButtons(ns("desc_mode"), "Summary",
         choices = c("Single variable" = "single",
                     "Summary table" = "table1"),
@@ -134,36 +133,96 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
           df[[v]] <- coerce_outcome_vector(df[[v]], tp[[v]], v)
       df
     })
+    # Row-variable and split-by choices exclude the subject-ID and time columns.
+    t1_reserved <- shiny::reactive({
+      ps <- panel_spec(); v <- c(ps$id, ps$time); v[nzchar(v)]
+    })
     output$t1_ui <- shiny::renderUI({
       if (!identical(mode(), "table1")) return(NULL)
-      rows <- analysable()
-      shiny::tagList(
-        shiny::selectizeInput(ns("t1_vars"), "Variables (rows)",
-          choices = rows, multiple = TRUE,
-          options = list(placeholder = "Pick the characteristics to summarise")),
-        shiny::selectInput(ns("t1_strata"), "Split by (outcome, optional)",
-          choices = c("(none)", grouping_vars())),
-        shiny::selectInput(ns("t1_cont"), "Continuous statistic",
-          choices = c("Auto (match the test)" = "auto",
-                      "Mean (SD)" = "mean_sd", "Median [IQR]" = "median_iqr")),
-        shiny::checkboxInput(ns("t1_overall"), "Include an Overall column", TRUE),
-        shiny::checkboxInput(ns("t1_missing"), "Show a Missing row", FALSE),
-        shiny::textInput(ns("t1_title"), "Table title",
-                         value = "Participant characteristics"),
-        shiny::helpText("A p-value column and a test footnote are added only when you split by an outcome.")
-      )
+      reserved <- t1_reserved()
+      rows <- setdiff(analysable(), reserved)
+      vars_input <- shiny::selectizeInput(ns("t1_vars"), "Variables (rows)",
+        choices = rows, multiple = TRUE,
+        options = list(placeholder = "Pick the characteristics to summarise"))
+      cont_input <- shiny::selectInput(ns("t1_cont"), "Continuous statistic",
+        choices = c("Auto" = "auto", "Mean (SD)" = "mean_sd", "Median [IQR]" = "median_iqr"))
+      title_input <- shiny::textInput(ns("t1_title"), "Table title",
+                                      value = "Participant characteristics")
+
+      if (identical(kind(), "repeated")) {
+        shiny::tagList(
+          shiny::radioButtons(ns("t1_rm_mode"), "Table type",
+            choices = c("Baseline (first time point)" = "baseline",
+                        "Across time points" = "evolution"),
+            selected = input$t1_rm_mode %||% "baseline"),
+          vars_input,
+          shiny::conditionalPanel(
+            sprintf("input['%s'] == 'baseline'", ns("t1_rm_mode")),
+            shiny::selectInput(ns("t1_strata"), "Split by group (optional)",
+              choices = c("(none)", setdiff(grouping_vars(), reserved))),
+            shiny::checkboxInput(ns("t1_overall"), "Include an Overall column", TRUE),
+            shiny::checkboxInput(ns("t1_missing"), "Show a Missing row", FALSE)),
+          shiny::conditionalPanel(
+            sprintf("input['%s'] == 'evolution'", ns("t1_rm_mode")),
+            shiny::checkboxInput(ns("t1_overall_evo"),
+              "Include a pooled Overall column (unusual for longitudinal data)", FALSE)),
+          cont_input,
+          title_input,
+          shiny::helpText("Repeated-measures summaries are descriptive (no p-values). 'Across time points' shows each visit as a column with participant retention and per-visit missingness.")
+        )
+      } else {
+        shiny::tagList(
+          vars_input,
+          shiny::selectInput(ns("t1_strata"), "Split by (outcome, optional)",
+            choices = c("(none)", grouping_vars())),
+          cont_input,
+          shiny::checkboxInput(ns("t1_overall"), "Include an Overall column", TRUE),
+          shiny::checkboxInput(ns("t1_missing"), "Show a Missing row", FALSE),
+          title_input,
+          shiny::helpText("A p-value column and a test footnote are added only when you split by an outcome.")
+        )
+      }
     })
     t1_obj <- shiny::reactive({
       shiny::req(identical(mode(), "table1"), length(input$t1_vars) > 0)
-      strata <- if (is.null(input$t1_strata) || input$t1_strata == "(none)") NULL
-                else input$t1_strata
-      vars <- setdiff(input$t1_vars, strata %||% character(0))
-      shiny::req(length(vars) > 0)
-      build_table_one(t1_data(), vars, strata = strata, types = t1_types(),
-                      opts = list(cont_style = input$t1_cont %||% "auto",
-                                  show_overall = isTRUE(input$t1_overall),
-                                  show_missing = isTRUE(input$t1_missing),
-                                  title = input$t1_title %||% "Participant characteristics"))
+      reserved <- t1_reserved()
+      cont <- input$t1_cont %||% "auto"
+      title <- input$t1_title %||% "Participant characteristics"
+      strata_in <- if (is.null(input$t1_strata) || input$t1_strata == "(none)") NULL
+                   else input$t1_strata
+
+      if (identical(kind(), "repeated")) {
+        ps <- panel_spec()
+        rm_mode <- input$t1_rm_mode %||% "baseline"
+        vars <- setdiff(input$t1_vars, reserved)
+        if (identical(rm_mode, "baseline")) {
+          shiny::req(ps$id, ps$time)
+          vars <- setdiff(vars, strata_in %||% character(0))
+          shiny::req(length(vars) > 0)
+          bdf <- tableone_baseline(t1_data(), ps$id, ps$time)
+          build_table_one(bdf, vars, strata = strata_in, types = t1_types(),
+            opts = list(cont_style = cont, show_p = FALSE,
+                        show_overall = isTRUE(input$t1_overall),
+                        show_missing = isTRUE(input$t1_missing), title = title))
+        } else {
+          shiny::req(ps$time, length(vars) > 0)
+          # Guard against a near-continuous time variable exploding into columns.
+          n_tp <- nlevels(droplevels(as.factor(t1_data()[[ps$time]])))
+          shiny::validate(shiny::need(n_tp >= 2 && n_tp <= 12,
+            "The time variable has too many (or too few) distinct values to tabulate as columns. Use discrete visits/waves, or bin the time variable."))
+          build_table_one(t1_data(), vars, strata = ps$time, types = t1_types(),
+            opts = list(cont_style = cont, show_p = FALSE,
+                        show_overall = isTRUE(input$t1_overall_evo),
+                        show_missing = TRUE, retention = TRUE, title = title,
+                        strata_order = .t1_time_order(t1_data()[[ps$time]])))
+        }
+      } else {
+        vars <- setdiff(input$t1_vars, strata_in %||% character(0))
+        shiny::req(length(vars) > 0)
+        build_table_one(t1_data(), vars, strata = strata_in, types = t1_types(),
+          opts = list(cont_style = cont, show_overall = isTRUE(input$t1_overall),
+                      show_missing = isTRUE(input$t1_missing), title = title))
+      }
     })
 
     descr <- shiny::reactive({
