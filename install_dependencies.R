@@ -30,13 +30,17 @@ optional <- c(
                 # if absent, large-n samples rely on the CLT note instead
   "httr2",      # AI interpretation panel's optional LLM backend (offline works
                 # without it); needed only to call an external model endpoint
-  "commonmark"  # renders the AI interpretation Markdown if shiny::markdown() is
-                # unavailable on an older Shiny,
+  "commonmark", # renders the AI interpretation Markdown if shiny::markdown() is
+                # unavailable on an older Shiny
   "renv",       # reproducible dependency restore from renv.lock
   "shinytest2", # browser smoke tests (requires a supported browser runtime)
   "covr",       # measured coverage gate
   "lintr",      # static lint gate
-  "styler"      # style verification gate
+  "styler",     # style verification gate
+  "urca",       # exact unit-root tests + Zivot-Andrews break test (time series)
+  "rugarch",    # GARCH volatility model (time series)
+  "shinymanager", # login layer when serving over a network (see DEPLOYMENT.md)
+  "getPass"     # hidden password entry for setup_auth.R (optional convenience)
 )
 
 install_if_missing <- function(pkgs) {

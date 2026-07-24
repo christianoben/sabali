@@ -21,6 +21,11 @@ mod_phase4_ui <- function(id) {
       shiny::uiOutput(ns("survival_info_ui")),
       shiny::uiOutput(ns("survival_strata_ui")),
       shiny::uiOutput(ns("survival_predictors_ui")),
+      shiny::uiOutput(ns("ts_value_ui")),
+      shiny::uiOutput(ns("ts_method_ui")),
+      shiny::uiOutput(ns("ts_info_ui")),
+      shiny::uiOutput(ns("ts_options_ui")),
+      shiny::uiOutput(ns("ts_predictors_ui")),
       shiny::tags$hr(),
       shiny::actionButton(ns("run"), "Fit analysis", icon = shiny::icon("play"),
                           class = "btn-primary"),
@@ -79,7 +84,8 @@ mod_phase4_server <- function(id, data, types, outcomes = NULL, panel = NULL,
     output$analysis_ui <- shiny::renderUI({
       s <- structure_info()
       fams <- c(if (isTRUE(s$clustered)) c("Clustered / repeated observations" = "clustered"),
-                if (isTRUE(s$survival))  c("Time-to-event (survival)" = "survival"))
+                if (isTRUE(s$survival))  c("Time-to-event (survival)" = "survival"),
+                if (isTRUE(s$time_series)) c("Time series (trend / seasonality / forecast)" = "time_series"))
       if (!length(fams))
         return(shiny::helpText("Set how your data is organised on the Data tab to enable these analyses."))
       # AI-plan gate: keep only the recommended family (preserving labels), but
@@ -282,8 +288,81 @@ mod_phase4_server <- function(id, data, types, outcomes = NULL, panel = NULL,
                             options = list(placeholder = "Choose one or more predictors"))
     })
 
+    # --- time-series family -------------------------------------------------
+    # The time/date column is declared on the Data tab (panel$time); the user
+    # picks the numeric series to analyse and the method here.
+    ts_time_col <- shiny::reactive(panel_spec()$time)
+    ts_value_vars <- shiny::reactive({
+      tp <- types()
+      nm <- names(tp)[tp %in% c("continuous", "count")]
+      setdiff(nm, c(ts_time_col(), reserved_analysis_vars(panel_spec())))
+    })
+    ts_methods <- shiny::reactive({
+      m <- names(TS_METHOD_LABELS)
+      # The GARCH method needs the optional rugarch package; hide it when absent
+      # (the id stays in the vocabulary, so the AI plan can never gate to an
+      # empty menu - gate_choices falls back to the feasible list).
+      if (!ts_rugarch_available()) m <- setdiff(m, "ts_garch")
+      gate_choices(m, plan_ts_method(plan_now()), ai_gate_on())
+    })
+
+    output$ts_value_ui <- shiny::renderUI({
+      shiny::req(input$analysis == "time_series")
+      vars <- ts_value_vars()
+      if (!length(vars))
+        return(shiny::helpText("No numeric series is available to analyse. Confirm a continuous or count variable on the Data tab."))
+      shiny::selectInput(ns("ts_value"), "Series to analyse", choices = vars)
+    })
+    output$ts_method_ui <- shiny::renderUI({
+      shiny::req(input$analysis == "time_series")
+      methods <- ts_methods()
+      shiny::radioButtons(ns("ts_method"), "Time-series analysis",
+                          choices = stats::setNames(methods, TS_METHOD_LABELS[methods]),
+                          selected = methods[[1]])
+    })
+    output$ts_info_ui <- shiny::renderUI({
+      shiny::req(input$analysis == "time_series", ts_time_col())
+      shiny::div(class = "alert alert-info", style = "padding:8px 12px;",
+        shiny::HTML(sprintf("Time ordered by <b>%s</b> (from the Data tab). The seasonal period is the number of observations in one cycle (e.g. 12 for monthly data with a yearly season, 4 for quarterly, 7 for daily-with-weekly).",
+                            ts_time_col())))
+    })
+    output$ts_options_ui <- shiny::renderUI({
+      shiny::req(input$analysis == "time_series", input$ts_method)
+      inferred <- tryCatch(ts_infer_frequency(data()[[ts_time_col()]]),
+                           error = function(e) 1L)
+      controls <- list(shiny::numericInput(ns("ts_frequency"), "Seasonal period",
+                                           value = inferred, min = 1, max = 366, step = 1))
+      if (input$ts_method %in% c("ts_holt_winters", "ts_arima", "ts_garch"))
+        controls <- c(controls, list(shiny::numericInput(ns("ts_horizon"),
+          "Forecast horizon (steps)", value = min(12L, inferred), min = 1, max = 240, step = 1)))
+      if (identical(input$ts_method, "ts_regression"))
+        controls <- c(controls, list(shiny::selectInput(ns("ts_trend_degree"),
+          "Trend shape", choices = c("Linear" = "1", "Quadratic" = "2"), selected = "1")))
+      do.call(shiny::tagList, controls)
+    })
+    output$ts_predictors_ui <- shiny::renderUI({
+      shiny::req(input$analysis == "time_series",
+                 identical(input$ts_method, "ts_regression"))
+      choices <- setdiff(ts_value_vars(), input$ts_value)
+      shiny::selectizeInput(ns("ts_predictors"), "External predictors (optional)",
+                            choices = choices, multiple = TRUE,
+                            options = list(placeholder = "Numeric covariates measured over the same times"))
+    })
+
     spec <- shiny::reactive({
       shiny::req(input$analysis)
+      if (input$analysis == "time_series") {
+        shiny::req(input$ts_value, input$ts_method, ts_time_col())
+        return(list(
+          analysis = "time_series",
+          method = input$ts_method,
+          value = input$ts_value,
+          time = ts_time_col(),
+          frequency = input$ts_frequency,
+          horizon = input$ts_horizon,
+          trend_degree = suppressWarnings(as.integer(input$ts_trend_degree %||% "1")),
+          predictors = input$ts_predictors))
+      }
       if (input$analysis == "clustered") {
         shiny::req(input$cluster_outcome, input$cluster_method,
                    input$cluster_predictors, input$cluster)
@@ -318,6 +397,12 @@ mod_phase4_server <- function(id, data, types, outcomes = NULL, panel = NULL,
 
     output$preview <- shiny::renderUI({
       shiny::req(input$analysis)
+      if (input$analysis == "time_series") {
+        shiny::req(input$ts_method)
+        return(shiny::HTML(sprintf(
+          "<b>Plan:</b> %s. Time-series methods assume the rows are in time order; confirm stationarity before forecasting.",
+          TS_METHOD_LABELS[[input$ts_method]])))
+      }
       if (input$analysis == "clustered") {
         shiny::req(input$cluster_outcome)
         plan <- suggest_model_plan(resolved_cluster_outcome_type(), "clustered")
@@ -331,7 +416,11 @@ mod_phase4_server <- function(id, data, types, outcomes = NULL, panel = NULL,
     result <- shiny::eventReactive(input$run, {
       shiny::req(spec())
       tryCatch({
-        if (spec()$analysis == "clustered")
+        if (spec()$analysis == "time_series")
+          shiny::withProgress(message = "Fitting the time-series analysis...", value = 0.35, {
+            run_guided_timeseries(data(), spec())
+          })
+        else if (spec()$analysis == "clustered")
           {
             prepared <- prepare_outcome_data(data(), spec()$outcome,
                                              spec()$outcome_type,
@@ -386,8 +475,10 @@ mod_phase4_server <- function(id, data, types, outcomes = NULL, panel = NULL,
         tables = list("Results" = res$coefficients,
                       "Model fit" = res$fit_stats),
         context = list(title = res$label,
-                       analysis = if (identical(spec()$analysis, "survival"))
-                         "Time-to-event survival analysis" else "Clustered / repeated-measures model",
+                       analysis = switch(spec()$analysis,
+                         survival = "Time-to-event survival analysis",
+                         time_series = "Time-series analysis",
+                         "Clustered / repeated-measures model"),
                        method = res$method, effect_name = res$effect_name,
                        app_interpretation = res$interpretation)
       )

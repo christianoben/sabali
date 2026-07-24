@@ -3,6 +3,11 @@
 .env
 *.key
 
+# Login credential store (contains hashed passwords; never commit)
+*.sqlite
+sabali_auth.sqlite
+sabali_auth.sqlite.backup-*
+
 # R session / data artefacts
 .Rhistory
 .RData

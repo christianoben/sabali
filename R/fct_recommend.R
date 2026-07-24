@@ -93,5 +93,8 @@ CHART_LABELS <- c(
   jitter = "Jitter / strip plot", grouped_bar = "Grouped bar chart",
   stacked_bar = "Stacked bar chart", mosaic = "Mosaic plot", heatmap = "Contingency heatmap",
   line = "Line chart", run_chart = "Run chart", corr_heatmap = "Correlation heatmap",
-  scatter_matrix = "Scatterplot matrix"
+  scatter_matrix = "Scatterplot matrix",
+  ts_acf = "Autocorrelation (ACF)", ts_pacf = "Partial autocorrelation (PACF)",
+  ts_decomposition = "Seasonal decomposition", ts_seasonal = "Seasonal subseries plot",
+  ts_spectrum = "Spectral density (periodogram)"
 )

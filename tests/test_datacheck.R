@@ -197,7 +197,110 @@ ok("dirty report lists a specific finding message", {
   stopifnot(grepl("negative value", txt))
 })
 
-cat("\n== I. Module wiring (mod_datacheck_server) ==\n")
+cat("\n== I. Contract defaults and module wiring ==\n")
+ok("contract defaults use observed required fields, bounds, and levels", {
+  d <- data.frame(
+    age = c(18, 42, NA),
+    sex = factor(c("Female", "Male", "Female")),
+    when = as.Date(c("2024-01-05", "2024-03-10", NA)),
+    note = c("x", "y", "x"),
+    stringsAsFactors = FALSE)
+  tp <- c(age = "continuous", sex = "binary", when = "datetime", note = "text")
+  got <- dq_contract_defaults(d, tp)
+  stopifnot(identical(got$required, names(d)),
+            identical(got$ranges$age, list(min = "18", max = "42")),
+            identical(got$ranges$when,
+                      list(min = "2024-01-05", max = "2024-03-10")),
+            identical(got$allowed_levels$sex, c("Female", "Male")),
+            is.null(got$ranges$note), is.null(got$allowed_levels$note))
+})
+ok("contract editor prefills required, range, and level controls", {
+  d <- data.frame(
+    age = c(18, 42, NA),
+    sex = factor(c("Female", "Male", "Female")),
+    when = as.Date(c("2024-01-05", "2024-03-10", NA)),
+    stringsAsFactors = FALSE)
+  tp <- c(age = "continuous", sex = "binary", when = "datetime")
+  html <- NULL
+  shiny::testServer(mod_datacheck_server,
+    args = list(data = reactive(d), types = reactive(tp),
+                panel = reactive(NULL), data_name = reactive("defaults.csv")), {
+      session$flushReact()
+      html <<- htmltools::renderTags(output$contract_editor)$html
+    })
+  stopifnot(grepl("contract_required_1", html, fixed = TRUE),
+            grepl("value=\"18\"", html, fixed = TRUE),
+            grepl("value=\"42\"", html, fixed = TRUE),
+            grepl("value=\"Female, Male\"", html, fixed = TRUE),
+            grepl("value=\"2024-01-05\"", html, fixed = TRUE),
+            grepl("value=\"2024-03-10\"", html, fixed = TRUE),
+            length(gregexpr("checked", html, fixed = TRUE)[[1]]) >= 3L)
+})
+ok("contract edits override the observed defaults", {
+  d <- data.frame(
+    age = c(18, 42, NA),
+    sex = factor(c("Female", "Male", "Female")),
+    stringsAsFactors = FALSE)
+  tp <- c(age = "continuous", sex = "binary")
+  edited <- NULL
+  shiny::testServer(mod_datacheck_server,
+    args = list(data = reactive(d), types = reactive(tp),
+                panel = reactive(NULL), data_name = reactive("edits.csv")), {
+      session$setInputs(contract_required_1 = FALSE,
+                        contract_min_1 = "20", contract_max_1 = "40",
+                        contract_levels_2 = "Female")
+      session$flushReact()
+      edited <<- contract()
+    })
+  stopifnot(!"age" %in% edited$required,
+            identical(edited$ranges$age, list(min = "20", max = "40")),
+            identical(edited$allowed_levels$sex, "Female"))
+})
+ok("changing expected type refreshes bounds and allowed levels", {
+  d <- data.frame(
+    value = c(1, 2, 3),
+    group = factor(c("A", "B", "A")),
+    stringsAsFactors = FALSE)
+  stopifnot(identical(
+    dq_contract_column_defaults(d, "value", "continuous"),
+    list(min = "1", max = "3", levels = "")))
+  stopifnot(identical(
+    dq_contract_column_defaults(d, "value", "nominal"),
+    list(min = "", max = "", levels = "1, 2, 3")))
+  stopifnot(identical(
+    dq_contract_column_defaults(d, "group", "continuous"),
+    list(min = "", max = "", levels = "")))
+  stopifnot(identical(
+    dq_contract_column_defaults(d, "group", "ordinal"),
+    list(min = "", max = "", levels = "A, B")))
+})
+ok("contract type change sends updates to all dependent controls", {
+  d <- data.frame(
+    value = c(1, 2, 3),
+    group = factor(c("A", "B", "A")),
+    stringsAsFactors = FALSE)
+  tp <- c(value = "continuous", group = "nominal")
+  messages <- list()
+  shiny::testServer(mod_datacheck_server,
+    args = list(data = reactive(d), types = reactive(tp),
+                panel = reactive(NULL), data_name = reactive("type-change.csv")), {
+      root_session <- session$rootScope()
+      root_session$sendInputMessage <- function(inputId, message) {
+        messages[[length(messages) + 1L]] <<- list(id = inputId, message = message)
+      }
+      session$flushReact()
+      session$setInputs(contract_type_1 = "nominal")
+      session$flushReact()
+  })
+  ids <- vapply(messages, `[[`, character(1), "id")
+  keep <- grepl("contract_(min|max|levels)_1$", ids)
+  contract_ids <- sub(".*(contract_(min|max|levels)_1)$", "\\1", ids[keep])
+  values <- stats::setNames(lapply(messages[keep], function(x) x$message$value),
+                            contract_ids)
+  stopifnot(identical(values[["contract_min_1"]], ""),
+            identical(values[["contract_max_1"]], ""),
+            identical(values[["contract_levels_1"]], "1, 2, 3"))
+})
 ok("qc summary + findings render; report content non-empty", {
   captured <- NULL
   shiny::testServer(mod_datacheck_server,

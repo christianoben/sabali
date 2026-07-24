@@ -169,18 +169,46 @@ describe_time_series <- function(x, time) {
                                     stringsAsFactors = FALSE))
   ord <- order(tt); v <- v[ord]; tt <- tt[ord]; n <- length(v)
   qs <- stats::quantile(v, c(0.25, 0.5, 0.75), names = FALSE)
-  data.frame(
-    statistic = c("n time points", "first time", "last time", "mean level", "SD",
-                  "median", "IQR", "min", "max", "first value", "last value",
-                  "net change (last - first)"),
-    value = c(as.character(n), as.character(min(tt)), as.character(max(tt)),
-              as.character(round(mean(v), 4)), as.character(round(stats::sd(v), 4)),
-              as.character(round(qs[2], 4)), as.character(round(qs[3] - qs[1], 4)),
-              as.character(round(min(v), 4)), as.character(round(max(v), 4)),
-              as.character(round(v[1], 4)), as.character(round(v[n], 4)),
-              as.character(round(v[n] - v[1], 4))),
-    stringsAsFactors = FALSE
-  )
+  stat <- c("n time points", "first time", "last time", "mean level", "SD",
+            "median", "IQR", "min", "max", "first value", "last value",
+            "net change (last - first)")
+  val <- c(as.character(n), as.character(min(tt)), as.character(max(tt)),
+           as.character(round(mean(v), 4)), as.character(round(stats::sd(v), 4)),
+           as.character(round(qs[2], 4)), as.character(round(qs[3] - qs[1], 4)),
+           as.character(round(min(v), 4)), as.character(round(max(v), 4)),
+           as.character(round(v[1], 4)), as.character(round(v[n], 4)),
+           as.character(round(v[n] - v[1], 4)))
+
+  # Time-series diagnostics (guarded so short/degenerate series still return the
+  # basic summary above). Uses the same engine as the Advanced models tab.
+  reg <- tryCatch(ts_regularity(tt), error = function(e) NULL)
+  if (!is.null(reg) && !is.na(reg$summary)) {
+    stat <- c(stat, "sampling"); val <- c(val, reg$summary)
+  }
+  freq <- tryCatch(ts_infer_frequency(tt), error = function(e) NA_integer_)
+  if (is.finite(freq)) { stat <- c(stat, "inferred seasonal period"); val <- c(val, as.character(freq)) }
+  acf1 <- tryCatch(as.numeric(stats::acf(v, lag.max = 1, plot = FALSE)$acf[2]),
+                   error = function(e) NA_real_)
+  if (is.finite(acf1)) { stat <- c(stat, "lag-1 autocorrelation"); val <- c(val, as.character(round(acf1, 4))) }
+  if (n >= 3) {
+    mk <- tryCatch(ts_mann_kendall(v), error = function(e) NULL)
+    if (!is.null(mk)) {
+      dir <- if (mk$p.value < 0.05) (if (mk$S > 0) "increasing" else "decreasing") else "no significant trend"
+      stat <- c(stat, "trend (Mann-Kendall)", "Mann-Kendall tau", "Mann-Kendall p-value")
+      val <- c(val, dir, as.character(round(mk$tau, 4)), as.character(signif(mk$p.value, 4)))
+    }
+  }
+  if (n >= 8) {
+    adf <- tryCatch(ts_adf(v), error = function(e) NULL)
+    kpss <- tryCatch(ts_kpss(v, null = "Level"), error = function(e) NULL)
+    if (!is.null(adf) && !is.null(kpss)) {
+      nonstat <- adf$p.value >= 0.05 || kpss$p.value < 0.05
+      stat <- c(stat, "ADF p-value", "KPSS p-value", "stationarity")
+      val <- c(val, as.character(signif(adf$p.value, 4)), as.character(signif(kpss$p.value, 4)),
+               if (nonstat) "non-stationary (consider differencing)" else "stationary")
+    }
+  }
+  data.frame(statistic = stat, value = val, stringsAsFactors = FALSE)
 }
 
 #' The descriptive tables appropriate to the declared dataset KIND.

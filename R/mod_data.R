@@ -115,6 +115,12 @@ mod_data_server <- function(id) {
       )
     })
 
+    data_name <- shiny::reactive({
+      if (is.null(input$file) || is.null(input$file$name) || !nzchar(input$file$name))
+        "active dataset"
+      else input$file$name
+    })
+
     detected <- shiny::reactive({
       shiny::req(raw())
       detect_all_types(raw())
@@ -517,8 +523,9 @@ mod_data_server <- function(id) {
       res$plan
     })
 
-    list(data = data_coerced, types = types, outcomes = outcomes,
-         panel = panel, base_levels = base_levels, plan = plan_out,
+    list(raw = raw, data = data_coerced, data_name = data_name,
+         types = types, outcomes = outcomes, panel = panel,
+         base_levels = base_levels, plan = plan_out,
          audit = audit, audit_record = record_audit)
   })
 }

@@ -40,6 +40,33 @@ if (!requireNamespace("shinytest2", quietly = TRUE)) {
       app$wait_for_idle()
       stopifnot(nchar(paste(app$get_html(selector = "body"), collapse = " ")) > 500L)
     }
+    # Loaded-data path: upload a bundled deliberately messy fixture, return to
+    # Tab 0, and verify that the scorecard and contract controls render after
+    # raw import, type detection, and data-quality execution.
+    app$upload_file(`data-file` = file.path(ROOT, "data/messy_cross_sectional_dataset.csv"))
+    app$wait_for_idle()
+    app$click(selector = "#nav a[data-value='datacheck']")
+    app$wait_for_idle()
+    loaded_html <- paste(app$get_html(selector = "body"), collapse = " ")
+    stopifnot(grepl("22-point coverage scorecard", loaded_html, fixed = TRUE),
+              grepl("Data contract", loaded_html, fixed = TRUE),
+              grepl("Data readiness:", loaded_html, fixed = TRUE))
+
+    # End-to-end contract interaction: the fixture's age column is continuous
+    # initially. Changing it to nominal must clear numeric bounds and populate
+    # the allowed-level field in the browser, not just in a server unit test.
+    app$click(selector = "#datacheck-tabs a[data-value='Data contract']")
+    app$wait_for_idle()
+    stopifnot(identical(app$get_value(input = "datacheck-contract_type_3"), "continuous"),
+              identical(app$get_value(input = "datacheck-contract_min_3"), "-5"),
+              identical(app$get_value(input = "datacheck-contract_max_3"), "999"))
+    app$set_inputs(`datacheck-contract_type_3` = "nominal")
+    app$wait_for_idle()
+    levels_after_type_change <- app$get_value(input = "datacheck-contract_levels_3")
+    stopifnot(identical(app$get_value(input = "datacheck-contract_type_3"), "nominal"),
+              identical(app$get_value(input = "datacheck-contract_min_3"), ""),
+              identical(app$get_value(input = "datacheck-contract_max_3"), ""),
+              grepl("-5, 0, 1", levels_after_type_change, fixed = TRUE))
     invisible(TRUE)
   }
   err <- tryCatch({ run_smoke(); NULL }, error = function(e) conditionMessage(e))

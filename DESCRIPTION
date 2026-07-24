@@ -1,7 +1,7 @@
 Package: sabali
 Type: Package
 Title: Sabali Guided Statistics Tool
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: person("Sabali", "Team", email = "maintainers@example.invalid", role = c("aut", "cre"))
 Author: Sabali Team [aut, cre]
 Maintainer: Sabali Team <maintainers@example.invalid>
@@ -41,7 +41,10 @@ Suggests:
     rcompanion,
     readxl,
     renv,
+    rugarch,
+    shinymanager,
     shinytest2,
     styler,
-    testthat
+    testthat,
+    urca
 RoxygenNote: 7.3.2

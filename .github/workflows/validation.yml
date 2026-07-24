@@ -37,6 +37,9 @@ jobs:
             any::httr2
             any::rcompanion
             any::DescTools
+            any::urca
+            any::rugarch
+            any::shinymanager
             any::renv
             any::shinytest2
             any::covr

@@ -13,8 +13,17 @@ library(ggplot2)
 # at startup, so a pre-existing ~/.Renviron - or launching R outside the project
 # directory (e.g. RStudio "Run App") - means the project file, which holds the
 # optional AI-interpretation key, is otherwise silently skipped. Reading it here
-# makes the key load however the app is launched.
+# makes the key load however the app is launched. Preserve explicitly supplied
+# authentication values: run_server.R uses these for recovery/test stores and
+# readRenviron() would otherwise silently replace them with the project store.
+.explicit_auth_db <- Sys.getenv("SABALI_AUTH_DB", "")
+.explicit_auth_passphrase <- Sys.getenv("SABALI_AUTH_PASSPHRASE", "")
 if (file.exists(".Renviron")) readRenviron(".Renviron")
+if (nzchar(.explicit_auth_db))
+  Sys.setenv(SABALI_AUTH_DB = .explicit_auth_db)
+if (nzchar(.explicit_auth_passphrase))
+  Sys.setenv(SABALI_AUTH_PASSPHRASE = .explicit_auth_passphrase)
+rm(.explicit_auth_db, .explicit_auth_passphrase)
 
 # Shiny (>= 1.5.0) auto-sources ./R, but we source explicitly too so the app
 # works regardless of Shiny version and load order.
@@ -64,8 +73,10 @@ server <- function(input, output, session) {
   }
 
   ds <- mod_data_server("data")
-  mod_datacheck_server("datacheck", data = ds$data, types = ds$types,
-                       panel = ds$panel)
+  mod_datacheck_server("datacheck", data = ds$data, raw_data = ds$raw,
+                       data_name = ds$data_name, types = ds$types,
+                       outcomes = ds$outcomes, panel = ds$panel,
+                       audit = ds$audit, audit_record = ds$audit_record)
   mod_descriptives_server("desc", data = ds$data, types = ds$types,
                           outcomes = ds$outcomes, panel = ds$panel,
                           add_report = add_report, audit = ds$audit_record)
@@ -92,5 +103,11 @@ server <- function(input, output, session) {
   })
   mod_report_server("report", report_store = report_store)
 }
+
+# Optional login layer (see R/fct_auth.R). When SABALI_AUTH_DB / _PASSPHRASE are
+# configured the whole app is placed behind a shinymanager sign-in screen; with
+# no configuration (local development, automated tests) it runs unwrapped.
+ui <- sabali_wrap_ui(ui)
+server <- sabali_wrap_server(server)
 
 shinyApp(ui, server)

@@ -31,7 +31,8 @@ default_chart_spec <- function() {
     palette = "Default", theme_base = "minimal", base_size = 18,
     font_family = "", legend_pos = "right", flip = FALSE, show_grid = TRUE,
     bins = 30, alpha = 0.85, point_size = 2, add_trend = TRUE,
-    add_ref_line = TRUE, stacked_fill = FALSE
+    add_ref_line = TRUE, stacked_fill = FALSE,
+    ts_time = NULL, ts_frequency = NULL
   )
 }
 
@@ -216,6 +217,12 @@ build_chart <- function(df, spec) {
 
     corr_heatmap = .corr_heatmap(df, spec),
     scatter_matrix = .scatter_matrix(df, spec),
+
+    ts_acf = .ts_chart(df, spec, "acf"),
+    ts_pacf = .ts_chart(df, spec, "pacf"),
+    ts_decomposition = .ts_chart(df, spec, "decomposition"),
+    ts_seasonal = .ts_chart(df, spec, "seasonal"),
+    ts_spectrum = .ts_chart(df, spec, "spectrum"),
 
     ggplot(df) + annotate("text", x = 1, y = 1,
                           label = paste("Chart type not available:", spec$type))

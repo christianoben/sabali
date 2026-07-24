@@ -28,7 +28,8 @@ ok("every standard regression id maps to a model label or explicit none", {
   stopifnot(!anyDuplicated(reg_ids), all(reg_ids %in% c(names(MODEL_METHOD_LABELS), "none")))
 })
 ok("every advanced catalogue id has a supported family or explicit no-op", {
-  supported <- c(names(MODEL_METHOD_LABELS), "cox_ph", "kaplan_meier", "time_series", "none")
+  supported <- c(names(MODEL_METHOD_LABELS), "cox_ph", "kaplan_meier",
+                 names(TS_METHOD_LABELS), "none")
   stopifnot(!anyDuplicated(adv_ids), all(adv_ids %in% supported))
 })
 ok("malformed plan ids are rejected without silent fallback", {
@@ -89,6 +90,14 @@ for (nm in names(ui_functions)) {
   })
 }
 ok("full navbar renders with every tab", {
+  # Render the app's own navbar regardless of any locally configured login.
+  # app.R preserves an explicitly supplied SABALI_AUTH_DB over .Renviron, so
+  # pointing it at a nonexistent file keeps the optional login wrapper off here
+  # (the login layer itself is covered by test_validate_auth.R).
+  old_db <- Sys.getenv("SABALI_AUTH_DB", unset = NA_character_)
+  Sys.setenv(SABALI_AUTH_DB = file.path(tempdir(), "no-such-auth-store.sqlite"))
+  on.exit(if (is.na(old_db)) Sys.unsetenv("SABALI_AUTH_DB")
+          else Sys.setenv(SABALI_AUTH_DB = old_db), add = TRUE)
   app_env <- new.env(parent = globalenv())
   sys.source(file.path(ROOT, "app.R"), envir = app_env)
   html <- htmltools::renderTags(app_env$ui)$html

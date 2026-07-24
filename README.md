@@ -12,17 +12,22 @@ guided decision logic in `Guided_Statistics_Workflow_Design.md`.
 Release controls are documented in [`DATA_GOVERNANCE.md`](DATA_GOVERNANCE.md),
 [`REVIEW_CHECKLIST.md`](REVIEW_CHECKLIST.md),
 [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md), and [`SECURITY.md`](SECURITY.md).
+The complete Tab 0 data-readiness workflow, scorecard, contract, review states,
+and privacy rules are documented in [`DATA_READINESS.md`](DATA_READINESS.md).
 The dependency baseline is recorded in [`renv.lock`](renv.lock); install `renv`
 and restore it before a controlled deployment.
 
 ## What Phase 1 does
 
-0. **Data check (Tab 0).** Runs the full battery of code-checkable data-quality
-   tests against the active dataset — structural issues, missingness, disguised
-   missing codes, numbers-stored-as-text, outliers, impossible counts,
-   implausible dates, inconsistent categories, and duplicated subject/time
-   records — and offers the result as a downloadable `.txt` report. Also builds
-   a downloadable CSV subset from a chosen set of columns.
+0. **Data check (Tab 0).** Runs a 22-point data-readiness scorecard across the
+   raw upload, the typed dataset, and an explicitly selected analysis context.
+   It reports action-oriented Issue/Impact/Recommendation findings, supports a
+   data contract for ranges, allowed levels, identifiers and subgroups, detects
+   missingness patterns, duplicates, dates, outliers, near-zero variance,
+   imbalance, correlation, and logistic separation, and records review decisions.
+   Downloadable action reports, findings, scorecards, review decisions, and a
+   metadata-only audit are available. It also builds a CSV subset from chosen
+   columns.
 1. **Load data — any format.** CSV, RDA, RDS, Excel, SPSS (`.sav`), Stata
    (`.dta`) and more, read into a data frame via `rio` (which uses `foreign`
    and `haven` underneath). CSV and RDA are the common cases.
@@ -68,13 +73,28 @@ Rscript install_dependencies.R
 R -e "shiny::runApp('.', launch.browser = TRUE)"
 ```
 
-## Deploy on the internal server
+## Serve it to other people
 
-Put this folder on the Shiny Server / Posit Connect host (e.g.
-`/srv/shiny-server/sabali`) with the packages installed for the server's R.
-Each browser session gets its own isolated data and report store, so the server
-can host as many concurrent users as it is provisioned for. No data is written
-to disk by the app.
+To share the app over a network with a login (e.g. from your own machine while
+you keep developing), see **[`DEPLOYMENT.md`](DEPLOYMENT.md)**. In short:
+
+```bash
+export SABALI_AUTH_PASSPHRASE="$(openssl rand -base64 24)"
+export SABALI_AUTH_DB="sabali_auth.sqlite"
+Rscript setup_auth.R        # create a login (>= 12-char password)
+# add the two vars to .Renviron, then:
+SABALI_HOST=0.0.0.0 Rscript run_server.R
+```
+
+`run_server.R` refuses to bind to a network address without a login, and
+`DEPLOYMENT.md` shows how to expose it over the internet **encrypted** (an HTTPS
+tunnel) — required for real patient data. Each browser session has its own
+isolated data/report store and nothing is written to disk, so the app scales to
+as many concurrent users as the host is provisioned for.
+
+For a managed host instead, put this folder on a Shiny Server / Posit Connect
+host (e.g. `/srv/shiny-server/sabali`) with the packages installed for the
+server's R.
 
 ## Project layout
 

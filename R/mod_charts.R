@@ -133,13 +133,17 @@ mod_charts_server <- function(id, data, types, outcomes = NULL, panel = NULL,
     output$panel_ui <- shiny::renderUI({
       ps <- panel_spec()
       if (!panel_active(ps)) return(NULL)
+      pure_ts <- !panel_has_subject_time(ps) && !is.null(ps$time) && nzchar(ps$time)
       shiny::tagList(
         shiny::h5("Longitudinal / time-series chart"),
         shiny::helpText("For line charts, the Data-tab time variable is used automatically."),
         shiny::checkboxInput(ns("panel_trajectories"), "Show individual trajectories",
                              value = panel_has_subject_time(ps)),
         shiny::checkboxInput(ns("panel_aggregate"), "Overlay mean trend with error bars",
-                             value = TRUE)
+                             value = TRUE),
+        if (pure_ts) shiny::numericInput(ns("ts_frequency"), "Seasonal period (for TS diagnostics)",
+          value = tryCatch(ts_infer_frequency(data()[[ps$time]]), error = function(e) 1L),
+          min = 1, max = 366, step = 1)
       )
     })
     output$facet_ui <- shiny::renderUI({
@@ -171,11 +175,21 @@ mod_charts_server <- function(id, data, types, outcomes = NULL, panel = NULL,
     reco <- shiny::reactive({
       shiny::req(sel_types())
       r <- recommend_charts(sel_types(), skewed = skewed())
-      if (panel_mode() && length(input$vars) &&
-          any(vapply(input$vars, function(v) is_numeric_type(chart_types()[[v]]), logical(1)))) {
+      has_numeric <- length(input$vars) &&
+        any(vapply(input$vars, function(v) is_numeric_type(chart_types()[[v]]), logical(1)))
+      if (panel_mode() && has_numeric) {
         r$options <- unique(c("line", "run_chart", r$options))
         r$default <- if ("line" %in% r$options) "line" else r$default
         r$rationale <- paste(r$rationale, "The selected time variable also enables longitudinal trend charts.")
+      }
+      # Pure time series (a time/date column, no subject clustering): offer the
+      # time-series diagnostic charts alongside the trend chart.
+      ps <- panel_spec()
+      if (panel_mode() && has_numeric && !panel_has_subject_time(ps) &&
+          !is.null(ps$time) && nzchar(ps$time)) {
+        r$options <- unique(c("line", "ts_decomposition", "ts_acf", "ts_pacf",
+                              "ts_seasonal", "ts_spectrum", r$options))
+        r$rationale <- paste(r$rationale, "Time-series diagnostics (decomposition, ACF/PACF, seasonal and spectral plots) are available for this series.")
       }
       r
     })
@@ -219,6 +233,13 @@ mod_charts_server <- function(id, data, types, outcomes = NULL, panel = NULL,
       s$caption <- input$caption
       s$xlab <- if (nzchar(input$xlab)) input$xlab else NULL
       s$ylab <- if (nzchar(input$ylab)) input$ylab else NULL
+      # Time-series diagnostic charts need the declared time column and the
+      # seasonal period; the value series is the (numeric) selected variable.
+      if (grepl("^ts_", s$type)) {
+        ps <- panel_spec()
+        s$ts_time <- ps$time
+        s$ts_frequency <- input$ts_frequency
+      }
       s
     })
 

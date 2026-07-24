@@ -40,9 +40,11 @@ controls appropriate to the data classification. Operators must not enable
 debug request/response logging for sensitive sessions.
 
 The in-memory audit record records event, UTC timestamp, field names, and table
-dimensions only. It intentionally excludes values, row identifiers, prompts,
-tokens, and endpoint responses. It is suitable for operational evidence, not
-for reconstructing patient activity.
+dimensions only, including data-readiness checks and review events. It
+intentionally excludes values, row identifiers, prompts, tokens, and endpoint
+responses. The Data Check report and CSV exports are generated only when a user
+downloads them and are not persisted by the application. The audit is suitable
+for operational evidence, not for reconstructing patient activity.
 
 ## Sign-off
 

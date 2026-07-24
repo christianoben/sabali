@@ -62,12 +62,13 @@ planner_advanced_catalogue <- function() {
   ids <- c("gee_gaussian", "gee_binomial", "gee_poisson",
            "lmm", "glmm_binomial", "glmm_poisson")
   base <- lapply(ids, function(id) list(id = id, name = unname(MODEL_METHOD_LABELS[[id]])))
+  ts <- lapply(names(TS_METHOD_LABELS),
+               function(id) list(id = id, name = unname(TS_METHOD_LABELS[[id]])))
   c(base, list(
     list(id = "cox_ph",       name = "Cox proportional-hazards regression (time-to-event)"),
-    list(id = "kaplan_meier", name = "Kaplan-Meier survival estimate / log-rank test"),
-    list(id = "time_series",  name = "Time-series / trend analysis"),
-    list(id = "none",         name = "None (no advanced model indicated)")
-  ))
+    list(id = "kaplan_meier", name = "Kaplan-Meier survival estimate / log-rank test")),
+    ts,
+    list(list(id = "none",    name = "None (no advanced model indicated)")))
 }
 
 # --- metadata builder (what actually gets handed over) ----------------------
@@ -323,13 +324,15 @@ plan_advanced_id <- function(plan) {
   if (!length(a) || !nzchar(a) || identical(a, "none")) character(0) else a
 }
 
-#' Advanced-tab analysis family ("clustered" / "survival") implied by a plan.
+#' Advanced-tab analysis family ("clustered" / "survival" / "time_series")
+#' implied by a plan.
 plan_advanced_family <- function(plan) {
   a <- plan_advanced_id(plan)
   if (!length(a)) return(character(0))
   if (a %in% c("cox_ph", "kaplan_meier")) "survival"
   else if (a %in% c("gee_gaussian", "gee_binomial", "gee_poisson",
                     "lmm", "glmm_binomial", "glmm_poisson")) "clustered"
+  else if (a %in% names(TS_METHOD_LABELS)) "time_series"
   else character(0)
 }
 
@@ -337,6 +340,13 @@ plan_advanced_family <- function(plan) {
 plan_survival_method <- function(plan) {
   switch(plan_advanced_id(plan) %||% "",
          cox_ph = "cox", kaplan_meier = "kaplan_meier", character(0))
+}
+
+#' Time-series method id (ts_*) implied by a plan, if the advanced recommendation
+#' is a time-series analysis; used to gate the method menu on the Advanced tab.
+plan_ts_method <- function(plan) {
+  a <- plan_advanced_id(plan)
+  if (length(a) && a %in% names(TS_METHOD_LABELS)) a else character(0)
 }
 
 #' Apply the gate: intersect `feasible` with `allowed`, but if that would leave

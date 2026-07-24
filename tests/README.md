@@ -23,6 +23,7 @@ Rscript tests/test_charts.R        # assign_chart_roles() + palette branches
 Rscript tests/test_heatmaps.R      # continuous-fill chart regression
 Rscript tests/test_assumptions.R   # Phase 2 assumption / distribution checks
 Rscript tests/test_datacheck.R     # Tab 0 data-quality engine + subset builder
+Rscript tests/test_data_readiness.R # 22-point contract, actions, review, and UI flow
 Rscript tests/test_design_coverage.R  # checklist of classical tests vs what is wired
 Rscript tests/test_lasso.R         # Phase 3 LASSO regression (glmnet) engine + wiring
 Rscript tests/test_ridge_pls.R     # Phase 3 ridge (glmnet) + PLS (pls) regression

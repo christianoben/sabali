@@ -4,3 +4,13 @@
 # AI_INTERPRET_ENDPOINT=https://approved.example/v1/chat/completions
 # AI_INTERPRET_KEY=replace-me
 # AI_INTERPRET_MODEL=approved-model
+
+# --- Serving over a network (see DEPLOYMENT.md) ----------------------------
+# Interface to bind: 127.0.0.1 = this machine only; 0.0.0.0 = reachable on the
+# network (a login is then required).
+# SABALI_HOST=127.0.0.1
+# SABALI_PORT=3838
+# Login store created by setup_auth.R and the passphrase that decrypts it.
+# Keep the passphrase secret; this file (.Renviron) is git-ignored.
+# SABALI_AUTH_DB=sabali_auth.sqlite
+# SABALI_AUTH_PASSPHRASE=replace-with-a-long-random-passphrase
