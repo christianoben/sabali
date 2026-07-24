@@ -47,13 +47,13 @@ ui <- navbarPage(
     tags$script(HTML("\n      Shiny.addCustomMessageHandler('advanced-tab-visibility', function(message) {\n        var link = document.querySelector('#nav a[data-value=\\\"advanced\\\"]');\n        if (!link) return;\n        var tab = link.parentElement;\n        tab.style.display = message.visible ? '' : 'none';\n        if (!message.visible && tab.classList.contains('active')) {\n          var dataLink = document.querySelector('#nav a[data-value=\\\"data\\\"]');\n          if (dataLink) $(dataLink).tab('show');\n        }\n      });\n    "))
   ),
   tabPanel("0 · Data check",   value = "datacheck", mod_datacheck_ui("datacheck")),
-  tabPanel("1 · Data",         mod_data_ui("data")),
-  tabPanel("2 · Descriptives", mod_descriptives_ui("desc")),
-  tabPanel("3 · Charts",       mod_charts_ui("charts")),
-  tabPanel("4 · Tests",        mod_tests_ui("tests")),
+  tabPanel("1 · Data",         value = "data",   mod_data_ui("data")),
+  tabPanel("2 · Descriptives", value = "desc",   mod_descriptives_ui("desc")),
+  tabPanel("3 · Charts",       value = "charts", mod_charts_ui("charts")),
+  tabPanel("4 · Tests",        value = "tests",  mod_tests_ui("tests")),
   tabPanel("5 · Regression",      value = "models",  mod_models_ui("models")),
   tabPanel("6 · Advanced models", value = "advanced", mod_phase4_ui("phase4")),
-  tabPanel("7 · Report",             mod_report_ui("report"))
+  tabPanel("7 · Report",       value = "report", mod_report_ui("report"))
 )
 
 server <- function(input, output, session) {

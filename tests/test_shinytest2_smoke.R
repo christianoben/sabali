@@ -34,9 +34,8 @@ if (!requireNamespace("shinytest2", quietly = TRUE)) {
     app$wait_for_idle()
     html <- paste(app$get_html(selector = "body"), collapse = " ")
     stopifnot(grepl("Sabali", html, fixed = TRUE))
-    for (value in c("datacheck", "1 · Data", "2 · Descriptives",
-                    "3 · Charts", "4 · Tests", "models", "advanced",
-                    "7 · Report")) {
+    for (value in c("datacheck", "data", "desc", "charts", "tests",
+                    "models", "advanced", "report")) {
       app$click(selector = sprintf("#nav a[data-value='%s']", value))
       app$wait_for_idle()
       stopifnot(nchar(paste(app$get_html(selector = "body"), collapse = " ")) > 500L)
