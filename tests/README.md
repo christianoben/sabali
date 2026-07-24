@@ -43,6 +43,7 @@ Rscript tests/test_validate_assumptions.R    # engineered assumption violations
 Rscript tests/test_validate_types.R          # import/type/label/edge-case checks
 Rscript tests/test_validate_governance_ui.R  # AI-off, catalogue, all-tab smoke checks
 Rscript tests/test_validate_security.R       # cleanup, audit, and governance wiring
+Rscript tests/test_validate_empty_state.R    # pre-upload Tests-tab rendering
 Rscript tests/test_validate_report.R         # Word report golden structure
 Rscript tests/test_validate_fuzz.R           # deterministic detect_type properties
 Rscript tests/test_validate_performance.R    # scale and progress guards

@@ -293,7 +293,14 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
 
     # --- family-specific controls -----------------------------------------
     output$controls <- shiny::renderUI({
-      if (input$family == "location") {
+      # The Tests tab is visible before a file is uploaded.  `input$family` is
+      # therefore NULL on the first render; comparing NULL with `==` produces
+      # logical(0), which makes `if` fail with "argument is of length zero".
+      family <- input$family %||% ""
+      if (!nzchar(family)) {
+        return(shiny::helpText("Load a dataset on the Data tab to choose a hypothesis test."))
+      }
+      if (identical(family, "location")) {
         all_designs <- c(
           "Compare to a value (one sample)" = "one_sample",
           "Two independent groups" = "two_independent",
@@ -335,7 +342,7 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
                                selected = panel_spec()$time %||% NULL),
             shiny::uiOutput(ns("mixed_subject_ui")))
         )
-      } else if (input$family == "categorical") {
+      } else if (identical(family, "categorical")) {
         cat_design_choices <- c(
           "Association between two categorical variables" = "association"
         )
@@ -377,7 +384,7 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
               shiny::helpText("Requires at least three repeated conditions/time points for Cochran's Q. With exactly two conditions, the paired binary route is McNemar's test.")
           )
         )
-      } else if (input$family == "cochran_q") {
+      } else if (identical(family, "cochran_q")) {
         shiny::tagList(
           shiny::selectInput(ns("outcome"), "Binary outcome", choices = cochran_outcomes()),
           shiny::selectInput(ns("cochran_within"), "Condition / time variable",
@@ -390,13 +397,13 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
           else
             shiny::helpText("Requires at least three repeated conditions/time points and one observation per subject-condition pair. Incomplete subject blocks are excluded.")
         )
-      } else if (input$family == "proportion") {
+      } else if (identical(family, "proportion")) {
         shiny::tagList(
           shiny::selectInput(ns("outcome"), "Binary outcome", choices = proportion_outcomes()),
           shiny::uiOutput(ns("success_ui")),
           shiny::numericInput(ns("ref_prop"), "Reference proportion", value = 0.5,
                               min = 0.001, max = 0.999, step = 0.01))
-      } else if (input$family == "point_biserial") {
+      } else if (identical(family, "point_biserial")) {
         shiny::tagList(
           shiny::selectInput(ns("pb_binary"), "Binary variable", choices = binary_vars()),
           shiny::selectInput(ns("pb_numeric"), "Numeric variable", choices = num_vars()))
