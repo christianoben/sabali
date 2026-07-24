@@ -58,5 +58,12 @@ ok("per-session report state is wired through reactiveValues", {
   stopifnot(grepl("report_store <- reactiveValues(items = list())", txt, fixed = TRUE),
             grepl("add_report <- function(item)", txt, fixed = TRUE))
 })
+ok("dependency scan is wired to the pinned lockfile", {
+  txt <- paste(readLines(file.path(ROOT, "tools/dependency_scan.R")), collapse = "\n")
+  wf <- paste(readLines(file.path(ROOT, ".github/workflows/dependency-scan.yml")), collapse = "\n")
+  stopifnot(grepl("renv.lock", txt, fixed = TRUE),
+            grepl("api.osv.dev", txt, fixed = TRUE),
+            grepl("dependency_scan.R", wf, fixed = TRUE))
+})
 
 report_and_exit()
