@@ -1,0 +1,5 @@
+# Generated manually from the package's roxygen declarations.
+exportPattern("^[[:alpha:]]+")
+importFrom(DT, dataTableOutput, renderDataTable)
+importFrom(ggplot2, aes, ggplot, ggsave)
+importFrom(shiny, moduleServer, NS, reactive, reactiveVal, renderUI)

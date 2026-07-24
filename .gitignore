@@ -1,0 +1,13 @@
+# Secrets - never commit
+.Renviron
+.env
+*.key
+
+# R session / data artefacts
+.Rhistory
+.RData
+.Rproj.user/
+.DS_Store
+.Rapp.history
+..Rcheck/
+*.tar.gz

@@ -1,0 +1,6 @@
+# Copy this file to .Renviron locally. Never commit secrets.
+# Use only an endpoint approved for the data class being analysed.
+# OPENCODE_API_KEY=replace-me
+# AI_INTERPRET_ENDPOINT=https://approved.example/v1/chat/completions
+# AI_INTERPRET_KEY=replace-me
+# AI_INTERPRET_MODEL=approved-model

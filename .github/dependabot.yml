@@ -1,0 +1,8 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  # R packages are pinned in renv.lock. The security reviewer must review
+  # lockfile updates and CRAN advisories as part of the release checklist.

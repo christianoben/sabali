@@ -1,0 +1,47 @@
+Package: sabali
+Type: Package
+Title: Sabali Guided Statistics Tool
+Version: 0.1.0
+Authors@R: person("Sabali", "Team", email = "maintainers@example.invalid", role = c("aut", "cre"))
+Author: Sabali Team [aut, cre]
+Maintainer: Sabali Team <maintainers@example.invalid>
+Description: An R Shiny application that guides analysts through data checks,
+    descriptive statistics, hypothesis tests, regression, clustered models,
+    survival analysis, charts, and Word reports.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends: R (>= 4.2.0)
+Imports:
+    DT,
+    MASS,
+    ggplot2,
+    flextable,
+    officer,
+    glmnet,
+    geepack,
+    lmtest,
+    lme4,
+    pls,
+    quantreg,
+    rio,
+    shiny,
+    survival
+Suggests:
+    ARTool,
+    DescTools,
+    GGally,
+    covr,
+    foreign,
+    haven,
+    httr2,
+    jsonlite,
+    lintr,
+    nortest,
+    openxlsx,
+    rcompanion,
+    readxl,
+    renv,
+    shinytest2,
+    styler,
+    testthat
+RoxygenNote: 7.3.2
