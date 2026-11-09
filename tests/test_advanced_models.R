@@ -14,6 +14,10 @@ suppressPackageStartupMessages({
   library(lme4)
 })
 
+near <- function(a, b, tol = 1e-6) {
+  is.finite(a) && is.finite(b) && abs(a - b) <= tol
+}
+
 set.seed(2026)
 ns <- 80
 id <- factor(rep(seq_len(ns), each = 3))
@@ -69,12 +73,38 @@ ok("LMM fixed effects match lmer()", {
             all.equal(r$coefficients$Estimate,
                       unname(lme4::fixef(ref)), tolerance = 1e-6))
 })
-ok("logistic GLMM reports odds ratios", {
+ok("LMM reports variance components and an ICC matching VarCorr()", {
+  r <- run_guided_clustered_model(d, list(outcome = "y", outcome_type = "continuous",
+                                          predictors = "x", method = "lmm",
+                                          cluster = "id", random_slope = "(none)"))
+  ref <- lme4::lmer(y ~ x + (1 | id), data = d, REML = FALSE)
+  vd <- as.data.frame(lme4::VarCorr(ref))
+  tau <- vd$vcov[vd$grp == "id"]; sigma2 <- vd$vcov[vd$grp == "Residual"]
+  icc_ref <- tau / (tau + sigma2)
+  stopifnot(!is.null(r$random_effects),
+            all(c("Component", "Variance", "Std. Dev.", "% of variance") %in%
+                  names(r$random_effects)),
+            any(r$random_effects$Component == "Residual"),
+            "ICC (id)" %in% r$fit_stats$Metric,
+            near(r$fit_stats$Value[r$fit_stats$Metric == "ICC (id)"], icc_ref, 1e-6))
+})
+ok("logistic GLMM reports odds ratios and a latent-scale ICC", {
   r <- run_guided_clustered_model(d, list(outcome = "bin", outcome_type = "binary",
                                           predictors = "x", method = "glmm_binomial",
                                           cluster = "id", random_slope = "(none)"))
   stopifnot(grepl("GLMM", r$label),
-            "Odds ratio" %in% names(r$coefficients))
+            "Odds ratio" %in% names(r$coefficients),
+            !is.null(r$random_effects),
+            any(grepl("Residual", r$random_effects$Component)),
+            "ICC (id)" %in% r$fit_stats$Metric)
+})
+ok("a random slope reports variance components but no headline ICC", {
+  r <- run_guided_clustered_model(d, list(outcome = "y", outcome_type = "continuous",
+                                          predictors = "x", method = "lmm",
+                                          cluster = "id", random_slope = "x"))
+  stopifnot(!is.null(r$random_effects),
+            nrow(r$random_effects) >= 3,
+            !("ICC (id)" %in% r$fit_stats$Metric))
 })
 ok("Poisson GEE and GLMM fit count outcomes", {
   rg <- run_guided_clustered_model(d, list(outcome = "count", outcome_type = "count",
@@ -100,6 +130,7 @@ ok("Advanced tab renders a clustered model and adds report items", {
                         cluster = "id", corstr = "exchangeable")
       session$flushReact(); session$setInputs(run = 1); session$flushReact()
       rendered <<- output$coefficients
+      session$setInputs(include_diag = TRUE); session$flushReact()
       session$setInputs(add = 1); session$flushReact()
     })
   stopifnot(is.character(rendered), grepl("Estimate", rendered, fixed = TRUE),

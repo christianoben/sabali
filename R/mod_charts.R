@@ -36,6 +36,7 @@ mod_charts_ui <- function(id) {
       shiny::checkboxInput(ns("stacked_fill"), "Show as proportions (bars)", FALSE),
       shiny::checkboxInput(ns("flip"), "Flip coordinates", FALSE),
       shiny::checkboxInput(ns("show_grid"), "Grid lines", TRUE),
+      shiny::checkboxInput(ns("data_labels"), "Data labels (values on bars/points)", TRUE),
       shiny::tags$hr(),
       shiny::textInput(ns("title"), "Title", ""),
       shiny::textInput(ns("subtitle"), "Subtitle", ""),
@@ -50,7 +51,8 @@ mod_charts_ui <- function(id) {
     shiny::mainPanel(
       width = 9,
       shiny::uiOutput(ns("kind_note")),
-      shiny::plotOutput(ns("plot"), height = "560px")
+      shiny::plotOutput(ns("plot"), height = "560px"),
+      mod_interpret_ui(ns("interpret"), title = "AI interpretation of this chart")
     )
   )
 }
@@ -228,7 +230,7 @@ mod_charts_server <- function(id, data, types, outcomes = NULL, panel = NULL,
       s$alpha <- input$alpha; s$point_size <- input$point_size
       s$bins <- input$bins; s$add_trend <- input$add_trend
       s$stacked_fill <- input$stacked_fill; s$flip <- input$flip
-      s$show_grid <- input$show_grid
+      s$show_grid <- input$show_grid; s$data_labels <- isTRUE(input$data_labels)
       s$title <- input$title; s$subtitle <- input$subtitle
       s$caption <- input$caption
       s$xlab <- if (nzchar(input$xlab)) input$xlab else NULL
@@ -266,6 +268,25 @@ mod_charts_server <- function(id, data, types, outcomes = NULL, panel = NULL,
 
     output$plot <- shiny::renderPlot({ plot_obj() })
 
+    # A compact summary of what the chart depicts (counts, group summaries, or an
+    # association), used to interpret the chart with AI and to draft its report
+    # write-up. Only aggregate summaries are sent - never raw patient rows.
+    chart_caption <- shiny::reactive({
+      if (nzchar(input$title %||% "")) input$title
+      else paste(CHART_LABELS[[input$type]], "-", paste(input$vars, collapse = ", "))
+    })
+    interp_payload <- shiny::reactive({
+      s <- tryCatch(spec(), error = function(e) NULL)
+      if (is.null(s)) return(list())
+      tbls <- tryCatch(chart_summary_tables(chart_data(), s), error = function(e) list())
+      if (!length(tbls)) return(list())
+      list(tables = tbls,
+           context = list(title = chart_caption(),
+                          analysis = sprintf("Chart (%s)", CHART_LABELS[[s$type]] %||% s$type),
+                          method = s$type))
+    })
+    interp <- mod_interpret_server("interpret", interp_payload)
+
     output$dl_png <- shiny::downloadHandler(
       filename = function() paste0("chart_", Sys.Date(), ".png"),
       content = function(f) ggplot2::ggsave(f, plot_obj(), width = 8,
@@ -273,10 +294,14 @@ mod_charts_server <- function(id, data, types, outcomes = NULL, panel = NULL,
     )
 
     shiny::observeEvent(input$add, {
-      cap <- if (nzchar(input$title)) input$title
-             else paste(CHART_LABELS[[input$type]], "-", paste(input$vars, collapse = ", "))
+      cap <- chart_caption()
+      p <- interp_payload()
+      ai <- if (length(p$tables %||% list()))
+        list(tables = p$tables, context = p$context,
+             interpretation = interp_reuse_text(interp$interpretation(), p$context))
+      else NULL
       add_report(list(kind = "plot", caption = cap, plot = plot_obj(),
-                      spec = spec()))
+                      spec = spec(), ai = ai))
       shiny::showNotification("Chart added to report.", type = "message", duration = 3)
     })
   })

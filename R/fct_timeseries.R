@@ -47,8 +47,10 @@ TS_SEASONAL_METHODS <- c("ts_decompose")
 # Returns 1 (no seasonality) for numeric indices or yearly-or-coarser dates.
 ts_infer_frequency <- function(time) {
   if (inherits(time, c("Date", "POSIXct", "POSIXt"))) {
-    d <- suppressWarnings(as.numeric(stats::median(diff(sort(as.numeric(as.Date(time)))),
-                                                   na.rm = TRUE)))
+    # Deduplicate first, so stacked (multi-series) data - where each date repeats
+    # once per series - does not collapse the median spacing to zero.
+    tn <- sort(unique(as.numeric(as.Date(time))))
+    d <- suppressWarnings(as.numeric(stats::median(diff(tn), na.rm = TRUE)))
     if (!is.finite(d) || d <= 0) return(1L)
     if (d <= 1.5)  return(7L)    # daily      -> weekly cycle
     if (d <= 10)   return(52L)   # weekly     -> yearly cycle
@@ -100,6 +102,18 @@ ts_prepare <- function(df, time_col, value_col, frequency = NULL, min_n = 8L) {
                  length(yv), min_n), call. = FALSE)
   ord <- order(tv)
   tv <- tv[ord]; yv <- yv[ord]
+  # A single ordered series cannot have the same time point twice. Repeated
+  # times almost always mean several series are stacked in one file (one per
+  # site/group), which - pooled - would be silently mis-analysed. Refuse, and
+  # point the user at the series/group selector.
+  dup <- sum(duplicated(tv))
+  if (dup > 0)
+    stop(sprintf(paste0(
+      "The time column '%s' has %d repeated time point(s), so these rows are ",
+      "not one ordered series. If the file stacks several series together (e.g. ",
+      "one per site or group), choose the series/group column so each is ",
+      "analysed on its own. Otherwise aggregate or remove the duplicate times."),
+      time_col, dup), call. = FALSE)
   reg <- ts_regularity(tv)
   freq <- frequency %||% ts_infer_frequency(tv)
   freq <- suppressWarnings(as.integer(round(as.numeric(freq))))
@@ -910,7 +924,8 @@ run_ts_garch <- function(prepared, horizon = 10L) {
 #' spec fields: method (ts_*), value, time, frequency (optional), horizon
 #' (forecast steps), predictors (ts_regression), trend_degree (ts_regression).
 #' `time` normally comes from the Data-tab declaration (panel$time).
-run_guided_timeseries <- function(df, spec) {
+# Run one method on a single, already-subset series.
+run_timeseries_single <- function(df, spec) {
   method <- spec$method
   if (is.null(method) || !method %in% names(TS_METHOD_LABELS))
     stop("Choose a time-series analysis method.", call. = FALSE)
@@ -933,4 +948,105 @@ run_guided_timeseries <- function(df, spec) {
                                         trend_degree = spec$trend_degree %||% 1L),
     ts_garch        = run_ts_garch(prepared, horizon = horizon),
     stop("Unknown time-series method.", call. = FALSE))
+}
+
+# Distinct, non-missing series labels (levels for a factor, else sorted unique).
+.ts_group_levels <- function(g) {
+  if (is.factor(g)) return(intersect(levels(g), as.character(unique(g[!is.na(g)]))))
+  sort(unique(as.character(g[!is.na(g)])))
+}
+
+# Analyse every stacked series in one pass: run the chosen method per group,
+# combine the tables with a leading "Series" column, and draw a faceted
+# overview. Series that are too short or otherwise fail are skipped and named,
+# never silently dropped.
+run_timeseries_all_series <- function(df, spec, grp, levs) {
+  gc <- as.character(df[[grp]])
+  per <- lapply(levs, function(lv) {
+    sub <- df[!is.na(gc) & gc == lv, , drop = FALSE]
+    out <- tryCatch(run_timeseries_single(sub, spec),
+                    error = function(e) list(error = conditionMessage(e)))
+    list(series = lv, out = out)
+  })
+  ok <- Filter(function(x) is.null(x$out$error), per)
+  bad <- Filter(function(x) !is.null(x$out$error), per)
+  if (!length(ok))
+    stop(sprintf("No series could be analysed. First issue (%s = %s): %s",
+                 grp, bad[[1]]$series, bad[[1]]$out$error), call. = FALSE)
+
+  stack_tab <- function(field) {
+    parts <- lapply(ok, function(x) {
+      tb <- x$out[[field]]
+      if (is.null(tb) || !nrow(tb)) return(NULL)
+      data.frame(Series = x$series, tb, check.names = FALSE,
+                 stringsAsFactors = FALSE)
+    })
+    parts <- Filter(Negate(is.null), parts)
+    if (!length(parts)) return(NULL)
+    do.call(rbind, parts)
+  }
+
+  # Faceted overview of the raw series (always meaningful, unlike merging N
+  # method-specific plots). Per-series diagnostics/forecasts stay available by
+  # selecting a single series.
+  ov <- data.frame(
+    .t = df[[spec$time]],
+    .y = suppressWarnings(as.numeric(as.character(df[[spec$value]]))),
+    .g = gc, stringsAsFactors = FALSE)
+  ov <- ov[!is.na(ov$.t) & is.finite(ov$.y) & ov$.g %in% vapply(ok, `[[`, "", "series"), ]
+  ov$.g <- factor(ov$.g, levels = vapply(ok, `[[`, "", "series"))
+  plt <- .ts_theme(
+    ggplot2::ggplot(ov, ggplot2::aes(x = .t, y = .y)) +
+      ggplot2::geom_line(colour = "#018786", alpha = 0.85) +
+      ggplot2::facet_wrap(~ .g, scales = "free_y"),
+    sprintf("%s by %s - %s", TS_METHOD_LABELS[[spec$method]], grp, spec$value),
+    spec$time, spec$value)
+
+  first <- ok[[1]]$out
+  skipped <- if (length(bad))
+    sprintf(" %d series were skipped (too short or unfittable): %s.",
+            length(bad), paste(sprintf("%s (%s)",
+              vapply(bad, `[[`, "", "series"),
+              vapply(bad, function(x) x$out$error, "")), collapse = "; ")) else ""
+  list(
+    label = sprintf("%s - per series across %s (%d series)",
+                    first$label, grp, length(ok)),
+    method = spec$method,
+    coefficients = stack_tab("coefficients"),
+    fit_stats = stack_tab("fit_stats"),
+    assumptions = Filter(Negate(is.null), list(
+      list(note = sprintf("Each series (%s) was analysed independently on its own time points; results are stacked with a 'Series' column.", grp)),
+      if (nzchar(skipped)) list(note = trimws(skipped)),
+      first$assumptions[[length(first$assumptions)]])),
+    diagnostic_plot = plt,
+    interpretation = sprintf(
+      "%d series were analysed separately by %s.%s Select a single series above to see its full diagnostics and any forecast plot. Compare the per-series rows in the results table rather than pooling them.",
+      length(ok), TS_METHOD_LABELS[[spec$method]], skipped),
+    rationale = "Stacked (multi-series) data is analysed one series at a time, because a single time-series model assumes one ordered sequence of observations.",
+    effect_name = first$effect_name)
+}
+
+run_guided_timeseries <- function(df, spec) {
+  grp <- spec$group
+  # No series column -> single series (ts_prepare's guard catches stacked data).
+  if (is.null(grp) || !nzchar(grp) || !grp %in% names(df))
+    return(run_timeseries_single(df, spec))
+
+  levs <- .ts_group_levels(df[[grp]])
+  if (length(levs) < 1L)
+    stop(sprintf("The series column '%s' has no usable values.", grp), call. = FALSE)
+  if (length(levs) > 60L)
+    stop(sprintf("The series column '%s' has %d distinct values - too many to analyse as separate series. Filter to fewer series on the Data tab, or pick a coarser grouping.",
+                 grp, length(levs)), call. = FALSE)
+
+  gv <- spec$group_value %||% "__all__"
+  if (!identical(gv, "__all__")) {
+    if (!gv %in% levs)
+      stop(sprintf("Series '%s' is not a value of '%s'.", gv, grp), call. = FALSE)
+    gc <- as.character(df[[grp]])
+    res <- run_timeseries_single(df[!is.na(gc) & gc == gv, , drop = FALSE], spec)
+    res$label <- sprintf("%s (%s = %s)", res$label, grp, gv)
+    return(res)
+  }
+  run_timeseries_all_series(df, spec, grp, levs)
 }

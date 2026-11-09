@@ -97,12 +97,114 @@ build the table, click **Add to report**, keep working, and download when the
 analysis is complete. Figures added to the report are numbered and captioned to
 APA style the same way.
 
+### Form metadata (REDCap or ODK)
+
+If your data came from REDCap or from ODK / Kobo, upload the definition it was
+collected with next to the data: a REDCap **Data Dictionary (codebook)** CSV, or
+an **XLSForm** workbook. The app detects which it is and takes each field's type
+and value labels from it instead of guessing, so coded categories are read as
+categories and display their real names throughout - descriptives, Table 1,
+charts, the planner and the report. Columns the definition does not describe
+(REDCap's own `redcap_event_name`, ODK's `meta/instanceID`) are left to the
+detector, and a code found in the data but missing from the definition is kept
+and reported rather than silently discarded.
+
+One ODK caveat worth knowing: if your export leaves select-multiple questions as
+a single column of space-separated answers, the app will not type it, because
+that column is a set rather than a category. Re-export with select multiples
+split into one column per choice, or derive the indicators you need on the
+Data-check tab.
+
+### Wide files
+
+Files with hundreds or thousands of columns (REDCap and Stata exports often
+have) show the type list 25 columns at a time, with a search box and a filter.
+On a file with more than 100 columns the list opens on **Needs a look** - the
+columns that usually need a decision, namely small sets of whole numbers that may
+really be coded categories, and columns detected as IDs. **Empty or constant**
+lists the columns nothing can be done with, and **All columns** shows everything.
+Corrections are remembered as you page, and a column you never open keeps its
+detected type.
+
+The filter is a prompt, not a verdict. It cannot spot every coded category: an
+antibiotic code list with 25 values looks exactly like a duration in days, so
+check the fields your analysis depends on directly. If your export came with a
+REDCap data dictionary, that is the authority on which fields are categorical.
+
 ## Regression and reporting
 
 Select candidate outcomes on the Data tab, choose a method on **5 · Regression**
 or **6 · Advanced models**, review diagnostics, and add confirmed tables/charts
 to **7 · Report**. Reported p-values are not a substitute for checking design,
 missingness, assumptions and clinical relevance.
+
+Once two or more predictors are chosen, **Interaction terms** offers every pair
+of them. An interaction asks whether the effect of one predictor depends on the
+level of another - for example whether a vaccine's effect on prescribing differs
+by sex. Both main effects stay in the model, and the interpretation panel reads
+the interaction as effect modification rather than as a plain association: when
+an interaction is in the model, the main effects of the variables it involves
+are conditional, not overall effects.
+
+### Complex sample designs
+
+If your data came from a weighted, stratified or clustered sample - a DHS or
+MICS extract, a national health survey, a cluster-randomised trial, a
+point-prevalence survey sampling patients within hospitals - declare the design
+on the Data tab and the Regression tab will offer design-based estimation.
+One- and two-stage designs are supported, and so are replicate-weight designs
+(BRR, Fay, JK1, JKn, bootstrap, successive-difference) - NHANES and several DHS
+recodes ship a block of replicate weights instead of PSU and stratum
+identifiers. Give the replicate columns as a name pattern such as
+`^BRR[0-9]+$`.
+
+### Path analysis and mediation
+
+**6 · Advanced models** offers a path model when you want to know not just
+whether an exposure is associated with an outcome, but whether it acts *through*
+something. Choose the outcome, the mediators in causal order (earliest first),
+and the exposures. The app reports each direct path plus an indirect effect for
+every route and a total effect per exposure.
+
+Two things are worth reading carefully. The mediator ordering is your causal
+claim - the data cannot tell you it is right. And if every variable is connected
+to every other, the model is *saturated*: its fit indices are perfect by
+arithmetic rather than by fitting well, and the app says so rather than letting
+them look like evidence.
+
+### What else is on the Tests tab
+
+Beyond the classical comparisons, the Tests tab covers the measures public-health
+work turns on:
+
+- **Effect measures** — risk difference, risk ratio, odds ratio and number needed
+  to treat for a binary outcome across two groups. Worth reading together: an
+  odds ratio is not a risk ratio once the outcome is common, and the app says so
+  when they diverge.
+- **Trend** — Cochran-Armitage, for an ordered exposure such as a dose, a wealth
+  quintile or an age band. It asks whether risk moves consistently with the
+  level, which a chi-square test cannot.
+- **Diagnostic accuracy** — sensitivity, specificity, predictive values and
+  likelihood ratios against a reference standard. The predictive values are
+  recomputed across a range of prevalences, because PPV and NPV depend on how
+  common the condition is where the test is used and do not transfer between
+  settings.
+- **Agreement** — Cohen's kappa for two raters, Fleiss' kappa for a panel of
+  three or more, with a per-category breakdown showing which category is being
+  applied inconsistently.
+
+**6 · Advanced models** additionally offers incidence rates over person-time,
+rate ratios, and direct or indirect (SMR) standardisation.
+
+### Missing data
+
+The Regression tab offers multiple imputation when complete-case analysis would
+actually cost you rows. It imputes each missing value several times, fits the
+model in each, and pools by Rubin's rules, so the uncertainty about the missing
+values reaches the standard errors. The single mean/median fills on the Data
+check tab do not do this — they are convenient for tidying a column, but they
+shrink standard errors and should not be used before a model you intend to
+report.
 
 ## AI features
 

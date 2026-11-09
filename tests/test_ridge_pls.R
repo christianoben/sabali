@@ -128,6 +128,7 @@ ok("Models tab fits ridge and pls and adds report items", {
                           method = mth, lambda_choice = "min", predictors = preds)
         session$flushReact(); session$setInputs(run = 1); session$flushReact()
         rendered <<- output$coefficients
+        session$setInputs(include_diag = TRUE); session$flushReact()
         session$setInputs(add = 1); session$flushReact()
       })
     stopifnot(is.character(rendered), grepl("Estimate", rendered, fixed = TRUE),

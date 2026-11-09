@@ -4,6 +4,9 @@
 # AI_INTERPRET_ENDPOINT=https://approved.example/v1/chat/completions
 # AI_INTERPRET_KEY=replace-me
 # AI_INTERPRET_MODEL=approved-model
+# Optional. Set to "disabled" on a reasoning model that bills thinking tokens as
+# output; sent to the endpoint only when set.
+# AI_INTERPRET_THINKING=disabled
 
 # --- Serving over a network (see DEPLOYMENT.md) ----------------------------
 # Interface to bind: 127.0.0.1 = this machine only; 0.0.0.0 = reachable on the

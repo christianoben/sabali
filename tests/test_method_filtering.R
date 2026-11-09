@@ -209,9 +209,10 @@ ok("[BUG] paired/repeated subject-ID choices exclude the chosen outcome", {
   stopifnot(!"cd4_count" %in% sid)
 })
 
-cat("\n== 2f. Posthoc results are wired into the Tests tab ==\n")
-ok("multi-group run renders posthoc HTML and adds it to the report", {
+cat("\n== 2f. Posthoc renders on the tab but is NOT pasted into the report ==\n")
+ok("multi-group run renders posthoc HTML but does not add it as a report table", {
   bag <- list(); rendered <- NULL
+  `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
   shiny::testServer(mod_tests_server,
     args = list(data = reactive(dat), types = reactive(types),
                 add_report = function(x) bag[[length(bag) + 1]] <<- x), {
@@ -224,8 +225,12 @@ ok("multi-group run renders posthoc HTML and adds it to the report", {
       session$setInputs(add = 1)
       session$flushReact()
     })
+  # Post-hoc pairwise comparisons still render on the tab, but a publication
+  # report gets them in prose (via the AI payload), not as their own table.
   stopifnot(is.character(rendered), grepl("p-adjusted", rendered, fixed = TRUE),
-            length(bag) == 3, grepl("Posthoc", bag[[3]]$caption))
+            length(bag) >= 1,
+            !any(vapply(bag, function(x) grepl("Posthoc", x$caption %||% ""),
+                        logical(1))))
 })
 
 report_and_exit()

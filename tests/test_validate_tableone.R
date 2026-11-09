@@ -118,6 +118,36 @@ ok(".t1_time_order sorts numeric/date but keeps label appearance order", {
   stopifnot(identical(.t1_time_order(c(12, 0, 6, 0)), c("0", "6", "12")))
 })
 
+ok(".t1_time_order respects an ordered factor's levels, not row order", {
+  ov <- factor(c("12mo", "12mo", "Baseline", "6mo", "6mo"),
+               levels = c("Baseline", "6mo", "12mo"), ordered = TRUE)
+  stopifnot(identical(.t1_time_order(ov), c("Baseline", "6mo", "12mo")))
+})
+
+ok("tableone_baseline uses earliest declared level for an ordered-factor time", {
+  df <- data.frame(
+    id = c(1, 1, 1, 2, 2, 2),
+    visit = factor(c("12mo", "Baseline", "6mo", "6mo", "12mo", "Baseline"),
+                   levels = c("Baseline", "6mo", "12mo"), ordered = TRUE),
+    score = c(114, 100, 106, 206, 214, 200))
+  b <- tableone_baseline(df, "id", "visit")
+  stopifnot(nrow(b) == 2L, all(as.character(b$visit) == "Baseline"),
+            identical(b$score, c(100, 200)))
+})
+
+ok("evolution columns follow ordered-factor levels despite scrambled rows", {
+  df <- data.frame(
+    id = c(1, 2, 1, 2, 1, 2),
+    visit = factor(c("12mo", "12mo", "Baseline", "Baseline", "6mo", "6mo"),
+                   levels = c("Baseline", "6mo", "12mo"), ordered = TRUE),
+    score = c(30, 32, 10, 12, 20, 22))
+  t <- build_table_one(df, "score", strata = "visit",
+        types = c(score = "continuous"),
+        opts = list(show_p = FALSE, show_overall = FALSE, retention = TRUE,
+                    strata_order = .t1_time_order(df$visit)))
+  stopifnot(identical(t$col_names, c("Baseline", "6mo", "12mo")))
+})
+
 ok("evolution table: chronological columns, no p, retention + missing rows", {
   t <- build_table_one(rm_df, "score", strata = "visit", types = rm_types,
         opts = list(show_p = FALSE, cont_style = "mean_sd", show_overall = FALSE,

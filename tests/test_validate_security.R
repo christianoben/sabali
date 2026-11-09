@@ -55,8 +55,8 @@ ok("governance sign-off is explicit and not falsely marked complete", {
 })
 ok("per-session report state is wired through reactiveValues", {
   txt <- paste(readLines(file.path(ROOT, "app.R")), collapse = "\n")
-  stopifnot(grepl("report_store <- reactiveValues(items = list())", txt, fixed = TRUE),
-            grepl("add_report <- function(item)", txt, fixed = TRUE))
+  stopifnot(grepl("report_store <- reactiveValues(items = list()", txt, fixed = TRUE),
+            grepl("add_report <- report_enricher(report_store)", txt, fixed = TRUE))
 })
 ok("dependency scan is wired to the pinned lockfile", {
   txt <- paste(readLines(file.path(ROOT, "tools/dependency_scan.R")), collapse = "\n")

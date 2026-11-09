@@ -42,6 +42,47 @@ ok(".read_rda errors cleanly on an .rda with no data frame", {
   stopifnot(is.character(err), grepl("no data frame", err, ignore.case = TRUE))
 })
 
+cat("\n== blank / whitespace cells become NA (REDCap-style exports) ==\n")
+ok("blank strings in a 2-level field are treated as NA, so it detects as binary", {
+  d <- data.frame(
+    id = 1:6,
+    colonization = c("Colonized", "Not colonized", "", "  ", "Colonized", "Not colonized"),
+    stringsAsFactors = FALSE)
+  f <- tempfile(fileext = ".csv"); utils::write.csv(d, f, row.names = FALSE, na = "")
+  got <- read_any_format(f, basename(f))
+  stopifnot(
+    setequal(unique(got$colonization[!is.na(got$colonization)]),
+             c("Colonized", "Not colonized")),          # no "" level
+    sum(is.na(got$colonization)) == 2,                   # the two blanks -> NA
+    identical(detect_type(got$colonization, "colonization"), "binary"),
+    "binary" %in% outcome_type_options(got$colonization))
+})
+ok(".blanks_to_na drops an empty factor level", {
+  d <- data.frame(g = factor(c("a", "b", "", "a")), stringsAsFactors = FALSE)
+  out <- .blanks_to_na(d)
+  stopifnot(!("" %in% levels(out$g)), sum(is.na(out$g)) == 1)
+})
+
+cat("\n== data-quality issues are advisory, not fatal ==\n")
+ok("constant and all-missing columns load with a warning, not an error", {
+  d <- data.frame(id = 1:5, konst = rep("x", 5), empty = NA,
+                  ok = c(1, 2, 3, 4, 5), stringsAsFactors = FALSE)
+  f <- tempfile(fileext = ".csv"); utils::write.csv(d, f, row.names = FALSE, na = "")
+  got <- read_any_format(f, basename(f))
+  warns <- attr(got, "import_warnings", exact = TRUE)
+  stopifnot(is.data.frame(got), ncol(got) == 4L, nrow(got) == 5L,
+            any(grepl("constant", warns)), any(grepl("missing values", warns)))
+})
+ok(".import_warnings is empty for a clean table; .assert_loadable passes it", {
+  d <- data.frame(a = 1:3, b = c("x", "y", "z"), stringsAsFactors = FALSE)
+  stopifnot(length(.import_warnings(d)) == 0L, isTRUE(.assert_loadable(d)))
+})
+ok(".assert_loadable still rejects a table with no columns", {
+  empty <- structure(list(), class = "data.frame", row.names = integer())
+  e <- tryCatch({ .assert_loadable(empty); NA }, error = function(e) conditionMessage(e))
+  stopifnot(is.character(e), grepl("no data", e, ignore.case = TRUE))
+})
+
 cat("\n== haven label stripping ==\n")
 if (requireNamespace("haven", quietly = TRUE)) {
   ok(".strip_haven_labels turns a fully-labelled column into a factor", {

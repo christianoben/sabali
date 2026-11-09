@@ -31,9 +31,21 @@ default_chart_spec <- function() {
     palette = "Default", theme_base = "minimal", base_size = 18,
     font_family = "", legend_pos = "right", flip = FALSE, show_grid = TRUE,
     bins = 30, alpha = 0.85, point_size = 2, add_trend = TRUE,
-    add_ref_line = TRUE, stacked_fill = FALSE,
+    add_ref_line = TRUE, stacked_fill = FALSE, data_labels = TRUE,
     ts_time = NULL, ts_frequency = NULL
   )
+}
+
+# Data-label styling, shared by every chart type that can carry value labels.
+.LABEL_SIZE <- 3.1
+# Format one value for an on-chart label: integers stay whole, other numbers
+# get up to two decimals (kept tidy so labels do not crowd the plot).
+.label_fmt <- function(v) {
+  vapply(v, function(x) {
+    if (!is.finite(x)) return("")
+    if (x == round(x) && abs(x) < 1e7) return(formatC(x, format = "d", big.mark = ","))
+    formatC(x, format = "f", digits = 2, big.mark = ",")
+  }, character(1))
 }
 
 # Apply a discrete colour/fill scale from the chosen palette.
@@ -198,13 +210,11 @@ build_chart <- function(df, spec) {
     jitter = ggplot(df, aes(x = .data[[g]], y = .data[[x]], colour = .data[[g]])) +
       geom_jitter(width = 0.2, height = 0, alpha = spec$alpha, size = spec$point_size),
 
-    grouped_bar = ggplot(df, aes(x = .data[[x]], fill = .data[[g]])) +
-      geom_bar(position = if (isTRUE(spec$stacked_fill)) "fill" else "dodge",
-               alpha = spec$alpha),
+    grouped_bar = .grouped_bar(df, x, g, spec,
+                               stack_pos = if (isTRUE(spec$stacked_fill)) "fill" else "dodge"),
 
-    stacked_bar = ggplot(df, aes(x = .data[[x]], fill = .data[[g]])) +
-      geom_bar(position = if (isTRUE(spec$stacked_fill)) "fill" else "stack",
-               alpha = spec$alpha),
+    stacked_bar = .grouped_bar(df, x, g, spec,
+                               stack_pos = if (isTRUE(spec$stacked_fill)) "fill" else "stack"),
 
     mosaic = ggplot(df, aes(x = .data[[x]], fill = .data[[g]])) +
       geom_bar(position = "fill", alpha = spec$alpha) +
@@ -252,24 +262,43 @@ has_group <- function(g) !is.null(g) && length(g) == 1 && nzchar(g)
 .bar_count <- function(df, x, spec, pareto = FALSE, group = NULL) {
   # A colour / group-by variable turns the count bar into a grouped bar.
   if (has_group(group)) {
-    return(ggplot(df, aes(x = .data[[x]], fill = .data[[group]])) +
-      geom_bar(position = if (isTRUE(spec$stacked_fill)) "fill" else "dodge",
-               alpha = spec$alpha))
+    fill_mode <- isTRUE(spec$stacked_fill)
+    p <- ggplot(df, aes(x = .data[[x]], fill = .data[[group]])) +
+      geom_bar(position = if (fill_mode) "fill" else "dodge", alpha = spec$alpha)
+    if (isTRUE(spec$data_labels))
+      p <- p + geom_text(stat = "count", aes(label = after_stat(count)),
+                         position = if (fill_mode) position_fill(vjust = 0.5)
+                                    else position_dodge(width = 0.9),
+                         vjust = if (fill_mode) 0.5 else -0.3,
+                         size = .LABEL_SIZE)
+    return(p)
   }
   d <- as.data.frame(table(df[[x]]), stringsAsFactors = FALSE)
   names(d) <- c(x, "count")
   if (pareto) d <- d[order(-d$count), , drop = FALSE]
   d[[x]] <- factor(d[[x]], levels = d[[x]])
-  ggplot(d, aes(x = .data[[x]], y = count, fill = .data[[x]])) +
+  p <- ggplot(d, aes(x = .data[[x]], y = count, fill = .data[[x]])) +
     geom_col(alpha = spec$alpha) + guides(fill = "none")
+  if (isTRUE(spec$data_labels))
+    p <- p + geom_text(aes(label = count), vjust = -0.35, size = .LABEL_SIZE)
+  p
 }
 
 .pie <- function(df, x, spec) {
   d <- as.data.frame(table(df[[x]]), stringsAsFactors = FALSE)
   names(d) <- c(x, "count")
-  ggplot(d, aes(x = "", y = count, fill = .data[[x]])) +
+  total <- sum(d$count)
+  # Compute the percentage BEFORE building the plot, so the column is part of
+  # the plot's captured data and the label aesthetic can find it.
+  d$pct <- if (total > 0) 100 * d$count / total else 0
+  p <- ggplot(d, aes(x = "", y = count, fill = .data[[x]])) +
     geom_col(width = 1, alpha = spec$alpha) + coord_polar(theta = "y") +
     theme_void(base_size = spec$base_size)
+  if (isTRUE(spec$data_labels) && total > 0)
+    p <- p + geom_text(aes(label = sprintf("%s\n%.0f%%", count, pct)),
+                       position = position_stack(vjust = 0.5),
+                       size = .LABEL_SIZE, colour = "white", fontface = "bold")
+  p
 }
 
 .mean_ci <- function(df, x, g, spec) {
@@ -281,10 +310,14 @@ has_group <- function(g) !is.null(g) && length(g) == 1 && nzchar(g)
                hi = m + stats::qt(0.975, max(n - 1, 1)) * se)
   }))
   d$group <- rownames(d)
-  ggplot(d, aes(x = group, y = mean, fill = group)) +
+  p <- ggplot(d, aes(x = group, y = mean, fill = group)) +
     geom_col(alpha = spec$alpha) +
     geom_errorbar(aes(ymin = lo, ymax = hi), width = 0.2) +
     guides(fill = "none") + labs(y = paste("mean", x, "(95% CI)"))
+  if (isTRUE(spec$data_labels))
+    p <- p + geom_text(aes(y = hi, label = .label_fmt(mean)),
+                       vjust = -0.5, size = .LABEL_SIZE)
+  p
 }
 
 .raincloud <- function(df, x, group = NULL, spec) {
@@ -316,6 +349,22 @@ has_group <- function(g) !is.null(g) && length(g) == 1 && nzchar(g)
   }
 }
 
+.grouped_bar <- function(df, x, g, spec, stack_pos = "dodge") {
+  p <- ggplot(df, aes(x = .data[[x]], fill = .data[[g]])) +
+    geom_bar(position = stack_pos, alpha = spec$alpha)
+  if (isTRUE(spec$data_labels)) {
+    pos <- switch(stack_pos,
+                  dodge = position_dodge(width = 0.9),
+                  fill = position_fill(vjust = 0.5),
+                  position_stack(vjust = 0.5))
+    p <- p + geom_text(stat = "count", aes(label = after_stat(count)),
+                       position = pos,
+                       vjust = if (identical(stack_pos, "dodge")) -0.3 else 0.5,
+                       size = .LABEL_SIZE)
+  }
+  p
+}
+
 .contingency_heat <- function(df, x, g, spec) {
   d <- as.data.frame(table(df[[x]], df[[g]]), stringsAsFactors = FALSE)
   names(d) <- c(x, g, "count")
@@ -329,7 +378,12 @@ has_group <- function(g) !is.null(g) && length(g) == 1 && nzchar(g)
   d <- df[order(df[[x]]), , drop = FALSE]
   p <- ggplot(d, aes(x = .data[[x]], y = .data[[y]]))
   if (!is.null(g) && nzchar(g)) p <- p + aes(colour = .data[[g]], group = .data[[g]])
-  p + geom_line(linewidth = 0.8) + geom_point(size = spec$point_size, alpha = spec$alpha)
+  p <- p + geom_line(linewidth = 0.8) +
+    geom_point(size = spec$point_size, alpha = spec$alpha)
+  if (isTRUE(spec$data_labels))
+    p <- p + geom_text(aes(label = .label_fmt(.data[[y]])),
+                       vjust = -0.7, size = .LABEL_SIZE, show.legend = FALSE)
+  p
 }
 
 .run_chart <- function(df, x, y, spec) {
@@ -339,6 +393,9 @@ has_group <- function(g) !is.null(g) && length(g) == 1 && nzchar(g)
     geom_line(colour = base_col(spec)) + geom_point(size = spec$point_size)
   if (isTRUE(spec$add_ref_line))
     p <- p + geom_hline(yintercept = med, linetype = "dashed", colour = "grey40")
+  if (isTRUE(spec$data_labels))
+    p <- p + geom_text(aes(label = .label_fmt(.data[[y]])),
+                       vjust = -0.7, size = .LABEL_SIZE)
   p
 }
 
@@ -364,4 +421,70 @@ has_group <- function(g) !is.null(g) && length(g) == 1 && nzchar(g)
   }
   ggplot() + annotate("text", x = 1, y = 1,
                       label = "Scatterplot matrix needs the GGally package.")
+}
+
+#' Summarise what a chart depicts as one or more small tables (counts,
+#' group-wise summary statistics, or an association). This is the AGGREGATE the
+#' AI interpreter and report write-up read - raw patient rows are never sent.
+#' Returns a named list of data frames (possibly empty). Never throws.
+chart_summary_tables <- function(df, spec) {
+  x <- spec$x; y <- spec$y; g <- spec$group; t <- spec$type
+  out <- list()
+  is_num <- function(v) is.numeric(v) || inherits(v, "Date") || inherits(v, "POSIXct")
+  num_summary <- function(v) {
+    v <- suppressWarnings(as.numeric(v)); v <- v[is.finite(v)]
+    if (!length(v)) return(NULL)
+    data.frame(n = length(v), mean = mean(v),
+               sd = if (length(v) > 1) stats::sd(v) else NA_real_,
+               median = stats::median(v),
+               Q1 = stats::quantile(v, 0.25, names = FALSE),
+               Q3 = stats::quantile(v, 0.75, names = FALSE),
+               min = min(v), max = max(v), check.names = FALSE)
+  }
+  tryCatch({
+    if (t %in% c("bar", "pareto", "pie") && !is.null(x) && x %in% names(df)) {
+      tab <- as.data.frame(table(df[[x]]), stringsAsFactors = FALSE)
+      names(tab) <- c(x, "count")
+      if (sum(tab$count) > 0)
+        tab$percent <- round(100 * tab$count / sum(tab$count), 1)
+      out[[paste0("Counts of ", x)]] <- tab
+    } else if (t %in% c("grouped_bar", "stacked_bar", "mosaic", "heatmap") &&
+               !is.null(x) && !is.null(g) && all(c(x, g) %in% names(df))) {
+      ct <- as.data.frame.matrix(table(df[[x]], df[[g]]))
+      out[[paste0(x, " by ", g)]] <-
+        cbind(data.frame(Level = rownames(ct), check.names = FALSE), ct)
+    } else if (t %in% c("scatter", "density2d") && !is.null(x) && !is.null(y) &&
+               all(c(x, y) %in% names(df))) {
+      xv <- suppressWarnings(as.numeric(df[[x]]))
+      yv <- suppressWarnings(as.numeric(df[[y]]))
+      keep <- is.finite(xv) & is.finite(yv)
+      r <- if (sum(keep) > 2) stats::cor(xv[keep], yv[keep]) else NA_real_
+      out[[sprintf("Association of %s and %s", x, y)]] <- data.frame(
+        statistic = c("n", "Pearson r"),
+        value = c(sum(keep), round(r, 3)), check.names = FALSE)
+    } else if (!is.null(x) && x %in% names(df) && is_num(df[[x]])) {
+      if (!is.null(g) && g %in% names(df)) {
+        parts <- split(df[[x]], df[[g]])
+        rows <- do.call(rbind, lapply(names(parts), function(k) {
+          s <- num_summary(parts[[k]]); if (is.null(s)) NULL else cbind(Group = k, s)
+        }))
+        if (!is.null(rows)) out[[paste0("Summary of ", x, " by ", g)]] <- rows
+      } else {
+        s <- num_summary(df[[x]])
+        if (!is.null(s)) out[[paste0("Summary of ", x)]] <- s
+      }
+    }
+    # Add a summary of the y variable for charts where it is a separate numeric
+    # series (line/run/panel), unless it was already the focus above.
+    if (!is.null(y) && y %in% names(df) && is_num(df[[y]]) &&
+        !(t %in% c("scatter", "density2d"))) {
+      s <- num_summary(df[[y]])
+      if (!is.null(s)) out[[paste0("Summary of ", y)]] <- s
+    }
+  }, error = function(e) NULL)
+
+  lapply(out, function(d) {
+    for (nm in names(d)) if (is.numeric(d[[nm]])) d[[nm]] <- round(d[[nm]], 3)
+    d
+  })
 }

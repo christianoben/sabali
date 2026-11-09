@@ -127,6 +127,7 @@ ok("Models tab fits a LASSO model and adds report items", {
                         predictors = preds)
       session$flushReact(); session$setInputs(run = 1); session$flushReact()
       rendered <<- output$coefficients
+      session$setInputs(include_diag = TRUE); session$flushReact()
       session$setInputs(add = 1); session$flushReact()
     })
   stopifnot(is.character(rendered), grepl("Selected", rendered, fixed = TRUE),

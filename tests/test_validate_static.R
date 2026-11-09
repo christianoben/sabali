@@ -29,6 +29,31 @@ ok("module servers use one local ns <- session$ns binding", {
     }
   }
 })
+ok("no top-level function is defined twice across R/", {
+  # R/ is sourced alphabetically into one environment, so a second definition of
+  # an existing name silently replaces the first everywhere. That is not a style
+  # nit: fct_diagnostic.R once redefined wilson_ci() with a different return
+  # shape, which quietly broke every caller in fct_descriptives.R and was only
+  # caught because that module happened to have tests. One name, one definition.
+  files <- list.files(file.path(ROOT, "R"), pattern = "^[^_].*[.][Rr]$",
+                      full.names = TRUE)
+  defs <- do.call(rbind, lapply(files, function(f) {
+    ln <- readLines(f, warn = FALSE)
+    m <- regmatches(ln, regexpr("^[.A-Za-z][._A-Za-z0-9]*(?= *<- *function)",
+                                ln, perl = TRUE))
+    if (!length(m)) return(NULL)
+    data.frame(fn = m, file = basename(f), stringsAsFactors = FALSE)
+  }))
+  dup <- defs[defs$fn %in% defs$fn[duplicated(defs$fn)], , drop = FALSE]
+  if (nrow(dup))
+    stop(sprintf("defined more than once: %s",
+                 paste(unique(sprintf("%s (%s)", dup$fn,
+                   vapply(unique(dup$fn), function(k)
+                     paste(dup$file[dup$fn == k], collapse = ", "),
+                     character(1)))), collapse = "; ")))
+  stopifnot(nrow(dup) == 0L)
+})
+
 ok("release documentation names the remaining human decisions", {
   txt <- paste(readLines(file.path(ROOT, "REVIEW_CHECKLIST.md")), collapse = "\n")
   stopifnot(grepl("Statistician reviewed", txt, fixed = TRUE),

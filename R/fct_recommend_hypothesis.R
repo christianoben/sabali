@@ -251,6 +251,11 @@ suggest_location_test <- function(design, n_levels = NA) {
 #' spec fields (by family):
 #'   family = "location":  outcome, design, plus group | within+subject | ref_value
 #'   family = "categorical": x, y, paired
+#'   family = "agreement": x, y, weights
+#'   family = "fleiss": raters (3+ columns)
+#'   family = "diagnostic": test, reference, positive
+#'   family = "effects": outcome, group, positive, exposed
+#'   family = "trend": outcome, exposure, positive
 #'   family = "proportion": outcome, ref_prop, success
 #'   family = "cochran_q": outcome, within, subject, success
 #'   family = "correlation": x, y, repeated, subject (when longitudinal)
@@ -279,6 +284,20 @@ run_guided_test <- function(df, spec) {
                         success = spec$success)
   } else if (fam == "point_biserial") {
     run_point_biserial(df[[spec$x]], df[[spec$y]])
+  } else if (fam == "effects") {
+    run_two_group_effects(df[[spec$outcome]], df[[spec$group]],
+                          positive = spec$positive, exposed = spec$exposed)
+  } else if (fam == "trend") {
+    run_trend_test(df[[spec$outcome]], df[[spec$exposure]],
+                   positive = spec$positive)
+  } else if (fam == "diagnostic") {
+    run_diagnostic(df[[spec$test]], df[[spec$reference]],
+                   positive = spec$positive)
+  } else if (fam == "fleiss") {
+    run_fleiss(df[, spec$raters, drop = FALSE])
+  } else if (fam == "agreement") {
+    run_agreement(df[[spec$x]], df[[spec$y]],
+                  weights = spec$weights %||% "unweighted")
   } else if (fam == "categorical") {
     run_categorical(df[[spec$x]], df[[spec$y]], paired = isTRUE(spec$paired))
   } else if (fam == "correlation") {

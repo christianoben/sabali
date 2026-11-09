@@ -18,21 +18,47 @@ MODEL_METHOD_LABELS <- c(
   gee_poisson = "GEE (Poisson)",
   lmm = "Linear mixed-effects model (LMM)",
   glmm_binomial = "Generalised linear mixed model (logistic GLMM)",
-  glmm_poisson = "Generalised linear mixed model (Poisson GLMM)"
+  glmm_poisson = "Generalised linear mixed model (Poisson GLMM)",
+  # Design-based (survey-weighted) regression. Listed here as well as in
+  # SURVEY_METHOD_LABELS because every shared consumer - the diagnostic plot
+  # title, the report, the planner catalogue - looks the label up in this vector.
+  svy_gaussian = "Survey-weighted linear regression (design-based)",
+  svy_binomial = "Survey-weighted logistic regression (design-based)",
+  svy_poisson = "Survey-weighted Poisson regression (design-based)"
 )
 
 MODEL_OUTCOME_TYPES <- c("continuous", "count", "binary")
 MODEL_PREDICTOR_TYPES <- c("continuous", "count", "binary", "nominal", "ordinal")
 
+#' Diagnostics as a display table. Named checks with a graded verdict and the
+#' suggested action, rather than the old "Diagnostic 1 / Diagnostic 2" listing
+#' that threw the verdict away.
 model_assumptions_df <- function(assumptions) {
   if (length(assumptions) == 0)
-    return(data.frame(Check = character(0), Note = character(0)))
+    return(data.frame(Check = character(0), Verdict = character(0),
+                      Note = character(0), `What to do` = character(0),
+                      check.names = FALSE, stringsAsFactors = FALSE))
+  lab <- function(x, i) {
+    if (!is.null(x$label) && nzchar(x$label) && !identical(x$check, "context")) x$label
+    else if (!is.null(x$label) && identical(x$check, "context")) x$label
+    else paste("Diagnostic", i)
+  }
   data.frame(
-    Check = paste("Diagnostic", seq_along(assumptions)),
-    Note = vapply(assumptions, function(x) {
-      if (is.null(x$note) || !length(x$note)) "" else as.character(x$note)
+    Check = vapply(seq_along(assumptions),
+                   function(i) lab(assumptions[[i]], i), character(1)),
+    Verdict = vapply(assumptions, function(x) {
+      s <- x$severity %||% "untested"
+      unname(ASSUMPTION_SEVERITY_LABELS[s]) %||% ""
     }, character(1)),
-    stringsAsFactors = FALSE
+    Note = vapply(assumptions, function(x) {
+      if (is.null(x$note) || !length(x$note)) "" else as.character(x$note)[1]
+    }, character(1)),
+    `What to do` = vapply(assumptions, function(x) {
+      rem <- x$remedy %||% list()
+      if (!length(rem)) return("")
+      paste(vapply(rem, function(z) z$what %||% "", character(1)), collapse = "; ")
+    }, character(1)),
+    check.names = FALSE, stringsAsFactors = FALSE, row.names = NULL
   )
 }
 
@@ -71,10 +97,77 @@ suggest_model_plan <- function(outcome_type, structure = "independent") {
 }
 
 # --- shared helpers --------------------------------------------------------
-model_formula <- function(outcome, predictors) {
+
+# Backtick-quote a column name only when R cannot parse it bare. Real exports
+# carry names R will not accept as symbols - the TTC survey workbook has columns
+# like `1_1_Household_ID`, and reformulate() fails outright on those - while
+# quoting every name would change the Term label of every model already fitted.
+.quote_term <- function(x) {
+  ifelse(make.names(x) == x, x, paste0("`", x, "`"))
+}
+
+#' Split interaction specifications into their component variables.
+#'
+#' An interaction is carried through the app as a single string of
+#' colon-separated variable names ("treatment:sex"), which is both what the user
+#' picks in the UI and what R's formula notation expects. Returns a list of
+#' character vectors, one per interaction.
+interaction_parts <- function(interactions) {
+  lapply(interactions, function(s) {
+    p <- trimws(strsplit(as.character(s), ":", fixed = TRUE)[[1]])
+    p[nzchar(p)]
+  })
+}
+
+#' Canonical, order-insensitive key for an interaction.
+#'
+#' `a:b` and `b:a` are the same term to R, so the two must compare equal when we
+#' de-duplicate them or match a saved selection against a rebuilt choice list.
+.interaction_key <- function(interactions) {
+  vapply(interaction_parts(interactions),
+         function(p) paste(sort(p), collapse = ":"), character(1))
+}
+
+#' Build the model formula from the chosen predictors and interactions.
+#'
+#' Interactions are appended as explicit `a:b` terms rather than written as
+#' `a*b`, because the main effects are validated to be present already (see
+#' `run_guided_model()`); spelling the product term out keeps the formula, and
+#' so the coefficient table, in the order the analyst selected.
+model_formula <- function(outcome, predictors, interactions = character(0)) {
   if (length(predictors) == 0)
     stop("Choose at least one predictor for the model.", call. = FALSE)
-  stats::reformulate(predictors, response = outcome)
+  terms <- .quote_term(predictors)
+  if (length(interactions)) {
+    terms <- c(terms, vapply(interaction_parts(interactions),
+                             function(p) paste(.quote_term(p), collapse = ":"),
+                             character(1)))
+  }
+  stats::as.formula(
+    paste(.quote_term(outcome), "~", paste(terms, collapse = " + ")),
+    env = parent.frame())
+}
+
+#' Validate a set of interaction specifications against the chosen predictors.
+#'
+#' Returns the cleaned interactions. The main-effect rule is deliberate: an
+#' interaction fitted without both of its main effects is almost always a
+#' mis-specification, and its coefficients do not mean what they appear to.
+validate_interactions <- function(interactions, predictors) {
+  interactions <- interactions[!is.na(interactions) & nzchar(interactions)]
+  if (!length(interactions)) return(character(0))
+  parts <- interaction_parts(interactions)
+  if (any(lengths(parts) < 2L))
+    stop("An interaction needs at least two different variables.", call. = FALSE)
+  if (any(vapply(parts, function(p) anyDuplicated(p) > 0L, logical(1))))
+    stop("An interaction cannot use the same variable twice.", call. = FALSE)
+  missing <- setdiff(unlist(parts), predictors)
+  if (length(missing))
+    stop(sprintf("Every variable in an interaction must also be selected as a predictor so its main effect is in the model. Add: %s.",
+                 paste(unique(missing), collapse = ", ")), call. = FALSE)
+  if (anyDuplicated(.interaction_key(interactions)) > 0L)
+    stop("The same interaction is listed more than once.", call. = FALSE)
+  interactions
 }
 
 model_frame <- function(df, formula, outcome, outcome_type,
@@ -200,14 +293,33 @@ model_interpretation <- function(coef_table, label, effect_name = NULL) {
     return(sprintf("The %s found no predictor with a p-value below 0.05 after adjusting for the other selected predictors. Associations are not proof of causation.",
                    label))
   terms <- coef_table$Term[keep]
-  shown <- paste(utils::head(terms, 3), collapse = ", ")
-  suffix <- if (length(terms) > 3) " and other terms" else ""
   effect_note <- if (is.null(effect_name))
     "Coefficients are on the model's outcome scale."
   else
     sprintf("Exponentiated coefficients are shown as %s.", effect_name)
-  sprintf("The %s identified evidence of an adjusted association for %s%s. %s Associations are not proof of causation.",
-          label, shown, suffix, effect_note)
+
+  # An interaction coefficient is a DIFFERENCE between effects, not an effect,
+  # and once one is in the model the main effects of its components are
+  # conditional on the other being at its reference. Reporting either as a plain
+  # "adjusted association" would misstate what was estimated, so the two kinds
+  # of term get separate sentences.
+  is_ix <- grepl(":", terms, fixed = TRUE)
+  listed <- function(x) {
+    paste0(paste(utils::head(x, 3), collapse = ", "),
+           if (length(x) > 3) " and other terms" else "")
+  }
+  main_part <- if (any(!is_ix))
+    sprintf("The %s identified evidence of an adjusted association for %s.",
+            label, listed(terms[!is_ix])) else
+    sprintf("The %s found no main effect below 0.05.", label)
+  ix_part <- if (any(is_ix)) sprintf(
+    " The interaction %s %s below 0.05, so the effect of one variable in %s depends on the level of the other - read the main effects of those variables as conditional, not as an overall effect.",
+    listed(terms[is_ix]),
+    if (sum(is_ix) == 1) "is" else "are",
+    if (sum(is_ix) == 1) "it" else "them") else ""
+
+  paste0(main_part, ix_part, " ", effect_note,
+         " Associations are not proof of causation.")
 }
 
 diagnostic_plot <- function(fit, method) {
@@ -224,29 +336,64 @@ diagnostic_plot <- function(fit, method) {
     ggplot2::geom_point(alpha = 0.65, colour = "#018786") +
     ggplot2::geom_smooth(method = "loess", se = FALSE, colour = "#D55E00") +
     ggplot2::labs(
-      title = paste("Residuals vs fitted values -", MODEL_METHOD_LABELS[[method]]),
+      title = paste("Residuals vs fitted values -",
+                    if (method %in% names(MODEL_METHOD_LABELS))
+                      MODEL_METHOD_LABELS[[method]] else method),
       x = "Fitted value", y = "Residual"
     ) +
     ggplot2::theme_minimal(base_size = 13)
 }
 
+#' Diagnostics for a fitted model.
+#'
+#' Returns a list of assumption_result()s - graded verdicts, not bare sentences.
+#' Each still carries `note`, so every existing renderer keeps working, but the
+#' verdict now survives to the UI, which can count violations, colour them and
+#' show the remedy. Checks that are merely informational (an explanation of what
+#' robust regression does, say) are returned as "ok" so they read as context
+#' rather than as a problem.
 model_assumptions <- function(fit, method, outcome_type) {
-  notes <- list()
-  add_note <- function(text) notes[[length(notes) + 1]] <<- list(note = text)
+  out <- list()
+  add <- function(res) out[[length(out) + 1L]] <<- res
+  # A note that is context rather than a check: no id, no remedy, always "ok".
+  add_context <- function(text)
+    add(list(check = "context", label = "About this method", family = "distribution",
+             severity = "ok", ok = TRUE, statistic = NA_real_, p = NA_real_,
+             test = "", note = text, remedy = list(), detail = list()))
 
   n <- tryCatch(stats::nobs(fit), error = function(e) NA_integer_)
+  res <- tryCatch(stats::residuals(fit), error = function(e) numeric(0))
+
   if (method == "ols") {
-    res <- tryCatch(stats::residuals(fit), error = function(e) numeric(0))
-    norm <- check_normality(res)
-    add_note(paste("Residual normality:", norm$note))
+    if (length(res)) {
+      nr <- check_normality(res, id = "normality_residuals", what = "the residuals")
+      add(nr)
+    }
     bp <- tryCatch(lmtest::bptest(fit), error = function(e) NULL)
-    if (is.null(bp)) add_note("Breusch-Pagan heteroscedasticity check could not be evaluated.")
-    else add_note(sprintf("Breusch-Pagan p = %s: %s.", p_fmt(bp$p.value),
-                          if (bp$p.value < 0.05) "evidence of non-constant variance; consider robust regression" else "no strong evidence of non-constant variance"))
+    if (is.null(bp)) {
+      add(assumption_result("homoscedasticity", "untested",
+                            "The Breusch-Pagan heteroscedasticity check could not be evaluated."))
+    } else {
+      # Breusch-Pagan has no natural effect size, so its p-value does drive this
+      # verdict - graded, so a marginal result is not treated as a failure.
+      sev <- if (!is.finite(bp$p.value)) "untested"
+             else if (bp$p.value >= 0.05) "ok"
+             else if (bp$p.value >= 0.01) "review" else "violated"
+      add(assumption_result("homoscedasticity", sev,
+        sprintf("Breusch-Pagan p = %s: %s.", p_fmt(bp$p.value),
+                switch(sev,
+                  ok = "no strong evidence of non-constant variance",
+                  review = "some evidence of non-constant variance",
+                  violated = "clear evidence of non-constant variance; consider robust regression",
+                  "not evaluated")),
+        p = bp$p.value, test = "Breusch-Pagan"))
+    }
+    # Serial dependence in the residuals, in the order the rows were supplied.
+    if (length(res) >= 10) add(check_autocorrelation(res, fit))
   } else if (method == "robust") {
-    add_note("Robust M-estimation reduces the influence of outlying residuals; coefficient p-values use a large-sample t approximation.")
+    add_context("Robust M-estimation reduces the influence of outlying residuals; coefficient p-values use a large-sample t approximation.")
   } else if (method == "quantile") {
-    add_note("Median / quantile regression estimates the selected conditional quantile and does not require normally distributed residuals.")
+    add_context("Median / quantile regression estimates the selected conditional quantile and does not require normally distributed residuals.")
   }
 
   influence <- if (grepl("^(gee|lmm|glmm)", method)) NULL
@@ -254,8 +401,15 @@ model_assumptions <- function(fit, method, outcome_type) {
   if (!is.null(influence) && length(influence) && is.finite(n) && n > 0) {
     threshold <- 4 / n
     flagged <- sum(influence > threshold, na.rm = TRUE)
-    add_note(sprintf("Cook's distance flagged %d observation%s above 4/n (threshold %.4f).",
-                     flagged, if (flagged == 1) "" else "s", threshold))
+    share <- flagged / n
+    # 4/n flags ~5% of well-behaved data by construction, so judge the share.
+    sev <- if (share <= 0.05) "ok" else if (share <= 0.10) "review" else "violated"
+    add(assumption_result("influence", sev,
+      sprintf("Cook's distance flagged %d observation%s above 4/n (threshold %.4f)%s.",
+              flagged, if (flagged == 1) "" else "s", threshold,
+              if (sev == "ok") " - about what is expected by chance"
+              else sprintf(", which is %.0f%% of the data", 100 * share)),
+      statistic = share, detail = list(flagged = flagged, n = n, threshold = threshold)))
   }
 
   if (outcome_type == "count" && method %in% c("poisson", "negative_binomial",
@@ -263,16 +417,34 @@ model_assumptions <- function(fit, method, outcome_type) {
     dispersion <- tryCatch(
       sum(stats::residuals(fit, type = "pearson")^2, na.rm = TRUE) /
         stats::df.residual(fit), error = function(e) NA_real_)
-    if (is.finite(dispersion))
-      add_note(sprintf("Pearson dispersion = %.3f; values well above 1 indicate overdispersion.", dispersion))
+    if (is.finite(dispersion)) {
+      sev <- if (dispersion <= 1.5) "ok" else if (dispersion <= 2) "review" else "violated"
+      add(assumption_result("overdispersion", sev,
+        sprintf("Pearson dispersion = %.3f%s.", dispersion,
+                switch(sev,
+                  ok = "; close enough to 1, so there is no sign of overdispersion",
+                  review = "; mild overdispersion",
+                  violated = "; substantial overdispersion, so a negative-binomial model is likely to fit better")),
+        statistic = dispersion))
+    }
+    # Excess zeros are a different problem from overdispersion and need saying
+    # separately: a Poisson model can have acceptable dispersion and still be
+    # unable to account for the zeros.
+    y <- tryCatch(stats::model.response(stats::model.frame(fit)), error = function(e) NULL)
+    mu <- tryCatch(stats::fitted(fit), error = function(e) NULL)
+    th <- tryCatch(fit$theta, error = function(e) NULL)
+    if (!is.null(y) && is.numeric(y)) add(check_zero_inflation(y, mu, th))
   }
-  # Keep this diagnostic visible for every regression family that exposes a
-  # model matrix.  It is especially important for health-data models where a
-  # near-duplicate predictor can make an apparently precise estimate unstable.
-  vif <- check_multicollinearity(fit)
-  if (!is.null(vif$note)) add_note(vif$note)
-  if (length(notes) == 0) add_note("No additional formal diagnostics were available for this model.")
-  notes
+
+  # Kept visible for every family that exposes a model matrix. It matters most
+  # for health data, where a near-duplicate predictor can make an apparently
+  # precise estimate unstable.
+  add(check_multicollinearity(fit))
+
+  if (!length(out))
+    add(assumption_result("context", "untested",
+                          "No additional formal diagnostics were available for this model."))
+  out
 }
 
 mixed_coefficient_table <- function(fit, effect_name = NULL) {
@@ -286,17 +458,122 @@ mixed_coefficient_table <- function(fit, effect_name = NULL) {
                     effect_name = effect_name)
 }
 
+# Random-effects variance components and the intraclass correlation (ICC) for a
+# fitted lme4 mixed model.  The fixed effects are reported separately in the
+# coefficient table; this decomposes the *unexplained* variation into the
+# between-cluster part (the random intercept) and the residual, and converts
+# that decomposition into the ICC - the share of variance that sits between
+# clusters, i.e. the correlation between two observations in the same cluster.
+#
+# Scale notes:
+#  * LMM (Gaussian): residual variance is on the response scale, ICC is exact.
+#  * Binomial GLMM: partitioned on the latent (logit) scale, where the residual
+#    variance is fixed at pi^2 / 3 (the latent-scale, Nakagawa/Snijders-Bosker
+#    convention).  The ICC is therefore a latent-scale ICC.
+#  * Other GLMM families (e.g. Poisson): the residual variance is not on a fixed
+#    scale, so only the random-effect variances are shown and no ICC is reported.
+#  * With a random slope the ICC is conditional on the covariate, so we report
+#    the variance components but omit a single headline ICC.
+#
+# Returns NULL when lme4 / VarCorr are unavailable, otherwise a list with:
+#   table      data.frame(Component, Variance, `Std. Dev.`, `% of variance`)
+#   icc        numeric ICC or NA_real_
+#   icc_label  e.g. "ICC (subject)" (NULL when no ICC)
+#   note       a scale / interpretation caveat, or NULL
+mixed_variance_components <- function(fit, outcome_type = "continuous") {
+  if (!requireNamespace("lme4", quietly = TRUE)) return(NULL)
+  vc <- tryCatch(lme4::VarCorr(fit), error = function(e) NULL)
+  if (is.null(vc)) return(NULL)
+  vdf <- tryCatch(as.data.frame(vc), error = function(e) NULL)
+  if (is.null(vdf) || !nrow(vdf)) return(NULL)
+
+  # Keep the variance rows (var2 is NA); the correlation rows (var2 set) belong
+  # to random-slope models and are not part of the variance partition.
+  var_rows <- vdf[is.na(vdf$var2), , drop = FALSE]
+  is_resid <- var_rows$grp == "Residual"
+  # "(Intercept)" already carries its own parentheses; only wrap bare slope names.
+  term_label <- ifelse(grepl("^\\(", var_rows$var1), var_rows$var1,
+                        paste0("(", var_rows$var1, ")"))
+  component <- ifelse(is_resid, "Residual",
+                      ifelse(is.na(var_rows$var1), var_rows$grp,
+                             paste0(var_rows$grp, " ", term_label)))
+  variance <- var_rows$vcov
+  std_dev <- var_rows$sdcor
+
+  note <- NULL
+  # lme4 reports a Residual row for Gaussian fits only; supply the latent-scale
+  # residual variance for a binomial GLMM so the partition (and ICC) close.
+  has_residual <- any(is_resid)
+  is_binomial <- identical(outcome_type, "binary") ||
+    isTRUE(tryCatch(stats::family(fit)$family == "binomial", error = function(e) FALSE))
+  if (!has_residual) {
+    if (is_binomial) {
+      component <- c(component, "Residual (latent, π²/3)")
+      variance <- c(variance, pi^2 / 3)
+      std_dev <- c(std_dev, sqrt(pi^2 / 3))
+      has_residual <- TRUE
+      note <- paste0("Variance is partitioned on the latent (logit) scale, ",
+                     "where the residual variance is fixed at π²/3 ≈ 3.29; ",
+                     "the ICC is therefore a latent-scale ICC.")
+    } else {
+      note <- paste0("For this GLMM family the residual variance is not on a ",
+                     "fixed scale, so no ICC is reported; only the random-effect ",
+                     "variances are shown.")
+    }
+  }
+
+  total <- sum(variance)
+  tab <- data.frame(
+    Component = component,
+    Variance = variance,
+    `Std. Dev.` = std_dev,
+    `% of variance` = if (is.finite(total) && total > 0) 100 * variance / total else NA_real_,
+    check.names = FALSE, stringsAsFactors = FALSE, row.names = NULL
+  )
+
+  # ICC = between-cluster intercept variance / total variance.  Only well defined
+  # for a random-intercept model with an available residual variance; a random
+  # slope makes it covariate-conditional, so we omit the headline number.
+  re_rows <- var_rows[!is_resid, , drop = FALSE]
+  has_slope <- any(!is.na(re_rows$var1) & re_rows$var1 != "(Intercept)")
+  intercept_var <- sum(re_rows$vcov[is.na(re_rows$var1) |
+                                      re_rows$var1 == "(Intercept)"])
+  group_name <- if (nrow(re_rows)) re_rows$grp[1] else NA_character_
+  icc <- NA_real_; icc_label <- NULL
+  if (has_residual && !has_slope && is.finite(total) && total > 0) {
+    icc <- intercept_var / total
+    icc_label <- sprintf("ICC (%s)", group_name)
+  } else if (has_slope) {
+    note <- paste(c(note, paste0("A random slope was fitted, so the ICC is ",
+      "conditional on the covariate; the variance components are reported instead ",
+      "of a single ICC.")), collapse = " ")
+  }
+
+  list(table = tab, icc = icc, icc_label = icc_label,
+       group = group_name, note = note)
+}
+
 clustered_model_assumptions <- function(fit, method, outcome_type) {
   notes <- model_assumptions(fit, method, outcome_type)
+  add <- function(res) notes[[length(notes) + 1L]] <<- res
   if (grepl("^gee", method))
-    notes[[length(notes) + 1]] <- list(note = "GEE estimates population-average effects and uses a robust sandwich variance for within-cluster correlation; review whether the working correlation is plausible.")
+    add(list(check = "context", label = "About this method", family = "structure",
+             severity = "ok", ok = TRUE, statistic = NA_real_, p = NA_real_, test = "",
+             note = "GEE estimates population-average effects and uses a robust sandwich variance for within-cluster correlation; review whether the working correlation is plausible.",
+             remedy = list(), detail = list()))
   if (grepl("^(lmm|glmm)", method)) {
     singular <- tryCatch(lme4::isSingular(fit, tol = 1e-4), error = function(e) NA)
-    notes[[length(notes) + 1]] <- list(note = if (isTRUE(singular))
-      "The mixed model appears singular; the random-effects structure may be too complex for the data."
-      else "The random-effects structure did not trigger a singular-fit warning.")
+    add(assumption_result("singular_fit",
+      if (is.na(singular)) "untested" else if (isTRUE(singular)) "violated" else "ok",
+      if (is.na(singular))
+        "The random-effects structure could not be checked for a singular fit."
+      else if (isTRUE(singular))
+        "The mixed model appears singular; the random-effects structure may be too complex for the data."
+      else "The random-effects structure did not trigger a singular-fit warning."))
     conv <- tryCatch(fit@optinfo$conv$lme4$messages, error = function(e) NULL)
-    if (!is.null(conv)) notes[[length(notes) + 1]] <- list(note = paste("Optimizer message:", paste(conv, collapse = " ")))
+    if (!is.null(conv))
+      add(assumption_result("singular_fit", "review",
+                            paste("Optimizer message:", paste(conv, collapse = " "))))
   }
   notes
 }
@@ -323,7 +600,19 @@ run_gee_model <- function(mf, formula, method, outcome_type, cluster,
     count = stats::poisson(),
     binary = stats::binomial())
   gee_data <- mf
-  gee_data[[".__gee_id"]] <- mf[[cluster]]
+  # geepack finds the cluster boundaries with diff(as.numeric(id)), so the id
+  # has to be numeric AND the rows have to arrive already grouped by cluster.
+  # Handing it the raw column breaks both ways on real study exports:
+  #  * A character id - household codes like "01/003/03" are the norm in REDCap
+  #    and Stata extracts - coerces to NA, the cluster structure collapses, and
+  #    the fit comes back with near-zero standard errors and every p-value at 0.
+  #    That is a wrong answer reported as a confident one, so it must not be
+  #    left to chance.
+  #  * Rows in an arbitrary order make the working correlation be estimated
+  #    from the wrong pairs, which moves alpha and the p-values.
+  # Coding the id to its integer level and sorting on it fixes both. The sort
+  # happens once, after every derived column is attached, so nothing misaligns.
+  gee_data[[".__gee_id"]] <- as.integer(as.factor(mf[[cluster]]))
   use_waves <- identical(corstr, "ar1")
   if (use_waves) {
   if (is.null(time) || !nzchar(time))
@@ -337,6 +626,11 @@ run_gee_model <- function(mf, formula, method, outcome_type, cluster,
     rhs <- paste(deparse(formula[[3]]), collapse = " ")
     gee_formula <- stats::as.formula(paste(".__gee_y ~", rhs))
   }
+  # Cluster-major order, and time-ordered within a cluster when AR-1 needs the
+  # waves to line up with the lag structure.
+  gee_data <- gee_data[if (use_waves)
+    order(gee_data[[".__gee_id"]], gee_data[[".__gee_waves"]])
+  else order(gee_data[[".__gee_id"]]), , drop = FALSE]
   fit <- tryCatch({
     if (use_waves)
       geepack::geeglm(gee_formula, data = gee_data, id = .__gee_id,
@@ -378,18 +672,22 @@ run_lmm_model <- function(mf, formula, cluster, random_slope, n_total) {
     error = function(e) stop("LMM could not be fitted: ", conditionMessage(e), call. = FALSE)
   )
   coef_tab <- mixed_coefficient_table(fit)
-  stats_tab <- named_metric_table(c(
+  rc <- mixed_variance_components(fit, "continuous")
+  metrics <- c(
     "n used" = stats::nobs(fit),
     "clusters" = length(unique(mf[[cluster]])),
     "AIC" = safe_aic(fit),
     "BIC" = tryCatch(as.numeric(stats::BIC(fit)), error = function(e) NA_real_),
-    "log-likelihood" = as.numeric(stats::logLik(fit))
-  ))
+    "log-likelihood" = as.numeric(stats::logLik(fit)))
+  if (!is.null(rc) && !is.null(rc$icc_label) && is.finite(rc$icc))
+    metrics[[rc$icc_label]] <- rc$icc
+  assumptions <- clustered_model_assumptions(fit, "lmm", "continuous")
+  if (!is.null(rc$note)) assumptions[[length(assumptions) + 1]] <- list(note = rc$note)
   model_result(MODEL_METHOD_LABELS[["lmm"]], "lmm", mf_formula, fit,
-               coef_tab, stats_tab,
-               clustered_model_assumptions(fit, "lmm", "continuous"),
+               coef_tab, named_metric_table(metrics), assumptions,
                "continuous", n_total, stats::nobs(fit),
-               recommendation = "LMM estimates subject-specific effects while accounting for correlation within the random-intercept cluster.")
+               random_effects = if (!is.null(rc)) rc$table else NULL,
+               recommendation = "LMM estimates subject-specific fixed effects while accounting for correlation within the random-intercept cluster; the random-effect variances are partitioned into an ICC.")
 }
 
 run_glmm_model <- function(mf, formula, method, outcome_type, cluster,
@@ -406,25 +704,30 @@ run_glmm_model <- function(mf, formula, method, outcome_type, cluster,
   )
   effect_name <- if (outcome_type == "binary") "Odds ratio" else "Rate ratio"
   coef_tab <- mixed_coefficient_table(fit, effect_name = effect_name)
-  stats_tab <- named_metric_table(c(
+  rc <- mixed_variance_components(fit, outcome_type)
+  metrics <- c(
     "n used" = stats::nobs(fit),
     "clusters" = length(unique(mf[[cluster]])),
     "AIC" = safe_aic(fit),
     "BIC" = tryCatch(as.numeric(stats::BIC(fit)), error = function(e) NA_real_),
-    "log-likelihood" = as.numeric(stats::logLik(fit))
-  ))
+    "log-likelihood" = as.numeric(stats::logLik(fit)))
+  if (!is.null(rc) && !is.null(rc$icc_label) && is.finite(rc$icc))
+    metrics[[rc$icc_label]] <- rc$icc
+  assumptions <- clustered_model_assumptions(fit, method, outcome_type)
+  if (!is.null(rc$note)) assumptions[[length(assumptions) + 1]] <- list(note = rc$note)
   model_result(MODEL_METHOD_LABELS[[method]], method, mf_formula, fit,
-               coef_tab, stats_tab,
-               clustered_model_assumptions(fit, method, outcome_type),
+               coef_tab, named_metric_table(metrics), assumptions,
                outcome_type, n_total, stats::nobs(fit),
                effect_name = effect_name,
-               recommendation = sprintf("%s estimates subject-specific effects with a random intercept for %s.",
+               random_effects = if (!is.null(rc)) rc$table else NULL,
+               recommendation = sprintf("%s estimates subject-specific fixed effects with a random intercept for %s; the random-effect variance is reported with a latent-scale ICC where applicable.",
                                          MODEL_METHOD_LABELS[[method]], cluster))
 }
 
 model_result <- function(label, method, formula, fit, coefficients, fit_stats,
                          assumptions, outcome_type, n_total, n_used,
-                         effect_name = NULL, recommendation = NULL, note = NULL) {
+                         effect_name = NULL, recommendation = NULL, note = NULL,
+                         random_effects = NULL) {
   list(
     label = label,
     method = method,
@@ -432,6 +735,7 @@ model_result <- function(label, method, formula, fit, coefficients, fit_stats,
     fit = fit,
     coefficients = coefficients,
     fit_stats = fit_stats,
+    random_effects = random_effects,
     assumptions = assumptions,
     diagnostic_plot = diagnostic_plot(fit, method),
     interpretation = model_interpretation(coefficients, label, effect_name),
@@ -769,71 +1073,76 @@ run_glm_model <- function(mf, formula, method, outcome_type, n_total) {
 #' spec fields: outcome, outcome_type, predictors, method, tau, cluster,
 #' corstr, time, random_slope.
 run_guided_model <- function(df, spec) {
-  if (is.null(spec$outcome) || !nzchar(spec$outcome) ||
-      !spec$outcome %in% names(df))
+  if (is.null(spec[["outcome"]]) || !nzchar(spec[["outcome"]]) ||
+      !spec[["outcome"]] %in% names(df))
     stop("Choose a valid outcome variable.", call. = FALSE)
-  if (is.null(spec$predictors) || length(spec$predictors) == 0)
+  if (is.null(spec[["predictors"]]) || length(spec[["predictors"]]) == 0)
     stop("Choose at least one predictor.", call. = FALSE)
-  if (any(!spec$predictors %in% names(df)))
+  if (any(!spec[["predictors"]] %in% names(df)))
     stop("One or more selected predictors are not present in the data.", call. = FALSE)
-  if (spec$outcome %in% spec$predictors)
+  if (spec[["outcome"]] %in% spec[["predictors"]])
     stop("The outcome cannot also be selected as a predictor.", call. = FALSE)
-  if (!spec$outcome_type %in% MODEL_OUTCOME_TYPES)
+  if (!spec[["outcome_type"]] %in% MODEL_OUTCOME_TYPES)
     stop("The selected outcome type is not supported by Phase 3.", call. = FALSE)
-  all_methods <- c(available_model_methods(spec$outcome_type, "independent"),
-                   available_model_methods(spec$outcome_type, "clustered"))
-  if (!spec$method %in% all_methods)
+  all_methods <- c(available_model_methods(spec[["outcome_type"]], "independent"),
+                   available_model_methods(spec[["outcome_type"]], "clustered"))
+  if (!spec[["method"]] %in% all_methods)
     stop("That model method is not available for the selected outcome type.", call. = FALSE)
 
-  clustered <- grepl("^(gee|lmm|glmm)", spec$method)
+  clustered <- grepl("^(gee|lmm|glmm)", spec[["method"]])
   if (clustered) {
-    if (is.null(spec$cluster) || !nzchar(spec$cluster) ||
-        !spec$cluster %in% names(df))
+    if (is.null(spec[["cluster"]]) || !nzchar(spec[["cluster"]]) ||
+        !spec[["cluster"]] %in% names(df))
       stop("Choose a valid subject or cluster ID for this model.", call. = FALSE)
-    if (spec$cluster %in% c(spec$outcome, spec$predictors))
+    if (spec[["cluster"]] %in% c(spec[["outcome"]], spec[["predictors"]]))
       stop("The subject or cluster ID must be different from the outcome and predictors.", call. = FALSE)
-    if (length(unique(df[[spec$cluster]][!is.na(df[[spec$cluster]])])) < 2)
+    if (length(unique(df[[spec[["cluster"]]]][!is.na(df[[spec[["cluster"]]]])])) < 2)
       stop("The selected subject or cluster ID has fewer than two observed clusters.", call. = FALSE)
   }
-  if (identical(spec$method, "gee_gaussian") || identical(spec$method, "gee_binomial") ||
-      identical(spec$method, "gee_poisson")) {
-    if (is.null(spec$corstr) || !spec$corstr %in% c("independence", "exchangeable", "ar1"))
+  if (identical(spec[["method"]], "gee_gaussian") || identical(spec[["method"]], "gee_binomial") ||
+      identical(spec[["method"]], "gee_poisson")) {
+    if (is.null(spec[["corstr"]]) || !spec[["corstr"]] %in% c("independence", "exchangeable", "ar1"))
       stop("Choose a valid GEE working correlation.", call. = FALSE)
-    if (identical(spec$corstr, "ar1") && (is.null(spec$time) || !nzchar(spec$time)))
+    if (identical(spec[["corstr"]], "ar1") && (is.null(spec[["time"]]) || !nzchar(spec[["time"]])))
       stop("AR-1 GEE needs a time / ordering variable.", call. = FALSE)
   }
-  random_slope <- spec$random_slope
+  random_slope <- spec[["random_slope"]]
   if (is.null(random_slope) || identical(random_slope, "(none)")) random_slope <- NULL
-  if (!is.null(random_slope) && !random_slope %in% spec$predictors)
+  if (!is.null(random_slope) && !random_slope %in% spec[["predictors"]])
     stop("The random slope must be one of the selected predictors.", call. = FALSE)
+  # Requiring both main effects also keeps the outcome out of an interaction:
+  # to name it in one, it would have to be selected as a predictor, which the
+  # outcome/predictor check above already refuses.
+  interactions <- validate_interactions(spec[["interactions"]] %||% character(0),
+                                        spec[["predictors"]])
 
-  formula <- model_formula(spec$outcome, spec$predictors)
+  formula <- model_formula(spec[["outcome"]], spec[["predictors"]], interactions)
   n_total <- nrow(df)
   extras <- if (clustered)
-    unique(c(spec$cluster, spec$time, random_slope)) else character(0)
+    unique(c(spec[["cluster"]], spec[["time"]], random_slope)) else character(0)
   extras <- extras[!is.na(extras) & nzchar(extras)]
-  mf <- model_frame(df, formula, spec$outcome, spec$outcome_type,
+  mf <- model_frame(df, formula, spec[["outcome"]], spec[["outcome_type"]],
                     extra_vars = extras)
-  if (clustered && spec$method %in% c("gee_gaussian", "gee_binomial", "gee_poisson"))
-    return(run_gee_model(mf, formula, spec$method, spec$outcome_type,
-                         spec$cluster, spec$corstr, spec$time, n_total))
-  if (identical(spec$method, "lmm"))
-    return(run_lmm_model(mf, formula, spec$cluster, random_slope, n_total))
-  if (spec$method %in% c("glmm_binomial", "glmm_poisson"))
-    return(run_glmm_model(mf, formula, spec$method, spec$outcome_type,
-                          spec$cluster, random_slope, n_total))
-  if (spec$method == "ols")
+  if (clustered && spec[["method"]] %in% c("gee_gaussian", "gee_binomial", "gee_poisson"))
+    return(run_gee_model(mf, formula, spec[["method"]], spec[["outcome_type"]],
+                         spec[["cluster"]], spec[["corstr"]], spec[["time"]], n_total))
+  if (identical(spec[["method"]], "lmm"))
+    return(run_lmm_model(mf, formula, spec[["cluster"]], random_slope, n_total))
+  if (spec[["method"]] %in% c("glmm_binomial", "glmm_poisson"))
+    return(run_glmm_model(mf, formula, spec[["method"]], spec[["outcome_type"]],
+                          spec[["cluster"]], random_slope, n_total))
+  if (spec[["method"]] == "ols")
     return(run_ols_model(mf, formula, n_total))
-  if (spec$method == "robust")
+  if (spec[["method"]] == "robust")
     return(run_robust_model(mf, formula, n_total))
-  if (spec$method == "quantile")
-    return(run_quantile_model(mf, formula, spec$tau %||% 0.5, n_total))
-  if (spec$method %in% c("lasso", "ridge"))
-    return(run_penalised_model(mf, formula, spec$outcome_type, spec$method,
-                               spec$lambda_choice %||% "min", n_total))
-  if (spec$method == "pls")
+  if (spec[["method"]] == "quantile")
+    return(run_quantile_model(mf, formula, spec[["tau"]] %||% 0.5, n_total))
+  if (spec[["method"]] %in% c("lasso", "ridge"))
+    return(run_penalised_model(mf, formula, spec[["outcome_type"]], spec[["method"]],
+                               spec[["lambda_choice"]] %||% "min", n_total))
+  if (spec[["method"]] == "pls")
     return(run_pls_model(mf, formula, n_total))
-  run_glm_model(mf, formula, spec$method, spec$outcome_type, n_total)
+  run_glm_model(mf, formula, spec[["method"]], spec[["outcome_type"]], n_total)
 }
 
 #' Fit a selected Phase 4 clustered/repeated-measures model.
@@ -841,7 +1150,7 @@ run_guided_model <- function(df, spec) {
 #' Keeping this wrapper separate from run_guided_model makes the phase boundary
 #' explicit in the UI while preserving the tested shared fitting routines.
 run_guided_clustered_model <- function(df, spec) {
-  if (is.null(spec$method) || !grepl("^(gee|lmm|glmm)", spec$method))
+  if (is.null(spec[["method"]]) || !grepl("^(gee|lmm|glmm)", spec[["method"]]))
     stop("Choose a GEE, LMM, or GLMM method for clustered data.", call. = FALSE)
   run_guided_model(df, spec)
 }

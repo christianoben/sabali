@@ -8,6 +8,12 @@ local({
 })
 
 cat("\n== assumption verdict flips ==\n")
+# Seed BEFORE the draw. This was previously seeded only further down, after
+# skew_x had already been sampled, so skew_x came from whatever RNG state the
+# process happened to start in - and Shapiro-Wilk fails to flag an n = 40
+# exponential sample about 2.7% of the time (54 of 2,000 draws), which made the
+# whole suite fail at random roughly once every forty runs.
+set.seed(91)
 normal_x <- qnorm(ppoints(40))
 skew_x <- rexp(40, 1)
 normal_check <- check_normality(normal_x)

@@ -16,3 +16,9 @@ sabali_auth.sqlite.backup-*
 .Rapp.history
 ..Rcheck/
 *.tar.gz
+
+# Not published: local Claude config, npm lockfile, sample datasets (regenerate via data/make_sample_data.*)
+.claude/
+package-lock.json
+data/*.csv
+tools/calibration/*.csv

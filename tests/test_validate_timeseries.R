@@ -287,4 +287,67 @@ if (ts_rugarch_available()) {
   cat("  SKIP  rugarch not installed; GARCH is exercised in CI\n")
 }
 
+# --- stacked (multi-series) data -------------------------------------------
+cat("\n== Stacked / multi-series time series ==\n")
+
+make_stacked <- function() {
+  dates <- rep(seq(as.Date("2022-01-31"), by = "month", length.out = 24), times = 3)
+  data.frame(
+    facility = rep(c("A", "B", "C"), each = 24),
+    month = dates,
+    cases = c(round(50 + (1:24) * 1.5), round(80 - (1:24) * 0.8),
+              round(rep(60, 24))),
+    stringsAsFactors = FALSE)
+}
+
+ok("pooled stacked data is refused with a series-aware message", {
+  df <- make_stacked()
+  msg <- friendly_error(run_guided_timeseries(df,
+    list(method = "ts_trend", value = "cases", time = "month", frequency = 12)))
+  stopifnot(!is.na(msg), grepl("repeated time point", msg),
+            grepl("series", msg))
+})
+
+ok("per-series (all) stacks results with a Series column and skips nothing", {
+  df <- make_stacked()
+  r <- run_guided_timeseries(df, list(method = "ts_trend", value = "cases",
+        time = "month", frequency = 12, group = "facility", group_value = "__all__"))
+  stopifnot("Series" %in% names(r$coefficients))
+  stopifnot(setequal(unique(r$coefficients$Series), c("A", "B", "C")))
+  # Series A rises, B falls: Mann-Kendall S has opposite signs.
+  s_of <- function(ser) r$coefficients$Value[r$coefficients$Series == ser &
+                          r$coefficients$Quantity == "Mann-Kendall S"]
+  stopifnot(s_of("A") > 0, s_of("B") < 0)
+  stopifnot(inherits(r$diagnostic_plot, "ggplot"))
+})
+
+ok("selecting one series analyses just that series", {
+  df <- make_stacked()
+  r <- run_guided_timeseries(df, list(method = "ts_trend", value = "cases",
+        time = "month", frequency = 12, group = "facility", group_value = "B"))
+  stopifnot(grepl("facility = B", r$label))
+  stopifnot(!("Series" %in% names(r$coefficients)))   # a single-series table
+})
+
+ok("too-short series are skipped and named, not silently dropped", {
+  df <- make_stacked()
+  df <- rbind(df, data.frame(facility = "D", month = df$month[1:3],
+                             cases = c(1, 2, 3)))       # only 3 points
+  r <- run_guided_timeseries(df, list(method = "ts_trend", value = "cases",
+        time = "month", frequency = 12, group = "facility", group_value = "__all__"))
+  stopifnot(!("D" %in% r$coefficients$Series))
+  notes <- paste(vapply(r$assumptions, function(a) a$note %||% "", ""), collapse = " ")
+  stopifnot(grepl("\\bD\\b", notes), grepl("skipped", notes))
+})
+
+ok("too many distinct series is refused", {
+  many <- data.frame(
+    g = rep(sprintf("s%02d", 1:70), each = 10),
+    t = rep(1:10, times = 70), v = rnorm(700))
+  msg <- friendly_error(run_guided_timeseries(many,
+    list(method = "ts_trend", value = "v", time = "t", group = "g",
+         group_value = "__all__")))
+  stopifnot(!is.na(msg), grepl("too many", msg))
+})
+
 report_and_exit()

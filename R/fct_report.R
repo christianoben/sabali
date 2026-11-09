@@ -57,6 +57,9 @@ export_word_report <- function(items, file, title = "Statistics Report",
                           it$caption %||% sprintf("Table %d", table_n))
       doc <- .add_table(doc, it$data)
     }
+    # The AI write-up (if any) sits as prose directly beneath its table/figure,
+    # never inside the table - so the table itself stays small and self-contained.
+    doc <- .add_writeup(doc, it$writeup)
     doc <- officer::body_add_par(doc, "", style = "Normal")
   }
 
@@ -75,16 +78,122 @@ export_word_report <- function(items, file, title = "Statistics Report",
   doc
 }
 
-# A plain data-frame table, APA-themed.
+# A plain data-frame table, trimmed to publication columns/rows and rendered
+# compact (single-spaced, tight padding, autofit so it stays small).
 .add_table <- function(doc, data) {
-  data <- as.data.frame(data)
+  data <- publication_table_df(data)
   if (requireNamespace("flextable", quietly = TRUE)) {
     ft <- flextable::flextable(data)
-    ft <- flextable::theme_apa(ft)
+    ft <- flextable::theme_booktabs(ft)
+    ft <- .style_flextable_compact(ft)
     ft <- flextable::autofit(ft)
+    if (ncol(data) > 8L)
+      ft <- flextable::set_table_properties(ft, layout = "autofit", width = 1)
     return(flextable::body_add_flextable(doc, ft))
   }
   officer::body_add_table(doc, data, style = "table_template")
+}
+
+# Shared compact styling: single line spacing, tight vertical padding, a small
+# clean font. Applied to every report flextable so tables auto-fit and read as
+# publication-ready rather than loosely double-spaced.
+.style_flextable_compact <- function(ft) {
+  ft <- flextable::font(ft, fontname = "Calibri", part = "all")
+  ft <- flextable::fontsize(ft, size = 10, part = "all")
+  ft <- flextable::line_spacing(ft, space = 1, part = "all")
+  ft <- flextable::padding(ft, padding.top = 1, padding.bottom = 1,
+                           padding.left = 5, padding.right = 5, part = "all")
+  ft <- flextable::bold(ft, part = "header")
+  ft
+}
+
+# Render an AI write-up as prose directly beneath a table or figure. Splits on
+# blank lines into paragraphs and closes with a small attribution note. A NULL
+# or empty write-up adds nothing.
+.add_writeup <- function(doc, text) {
+  if (is.null(text) || !nzchar(trimws(text))) return(doc)
+  paras <- strsplit(trimws(text), "\n[[:space:]]*\n")[[1]]
+  for (p in paras) {
+    p <- gsub("[ \t]*\n[ \t]*", " ", trimws(p))
+    if (nzchar(p)) doc <- officer::body_add_par(doc, p, style = "Normal")
+  }
+  doc <- officer::body_add_fpar(doc, officer::fpar(
+    officer::ftext("AI-generated summary; verify against the table above.",
+                   officer::fp_text(italic = TRUE, font.size = 8,
+                                    color = "grey40"))))
+  doc
+}
+
+#' Trim a data-frame table to what a paper would actually report.
+#'
+#' Rules (all safe no-ops when a column/row is absent):
+#'  * hypothesis-test Field/Value tables drop the baked-in "Interpretation" row
+#'    (it belongs in prose beneath the table, not inside it);
+#'  * coefficient tables drop raw "Std. Error" and "Statistic" columns;
+#'  * when an exponentiated effect (OR/RR/IRR/HR) carries its own CI, the
+#'    redundant log-scale "Estimate"/"CI lower"/"CI upper" are dropped;
+#'  * numbers are formatted for display - p-values via p_fmt(), counts as
+#'    integers, everything else to a tidy fixed precision.
+publication_table_df <- function(df) {
+  df <- as.data.frame(df, check.names = FALSE, stringsAsFactors = FALSE)
+  if (!nrow(df) || !ncol(df)) return(df)
+
+  if (ncol(df) == 2L && all(c("Field", "Value") %in% names(df))) {
+    df <- df[!df[["Field"]] %in% c("Interpretation"), , drop = FALSE]
+    rownames(df) <- NULL
+    return(df)
+  }
+
+  drop <- intersect(c("Std. Error", "Statistic"), names(df))
+  eff_lo <- grep(" CI lower$", names(df), value = TRUE)
+  eff_names <- sub(" CI lower$", "", eff_lo)
+  eff_names <- eff_names[eff_names %in% names(df) & nzchar(eff_names)]
+  if (length(eff_names) && "Estimate" %in% names(df))
+    drop <- union(drop, intersect(c("Estimate", "CI lower", "CI upper"), names(df)))
+  if (length(drop)) df <- df[, setdiff(names(df), drop), drop = FALSE]
+
+  for (nm in names(df)) {
+    v <- df[[nm]]
+    if (!is.numeric(v)) next
+    if (grepl("p-value|p\\.value|^p$|Pr\\(", nm))
+      df[[nm]] <- vapply(v, function(x) if (is.finite(x)) p_fmt(x) else "",
+                         character(1))
+    else
+      df[[nm]] <- vapply(v, .num_fmt, character(1))
+  }
+  rownames(df) <- NULL
+  df
+}
+
+# Tidy display formatting for one numeric value: integers stay integers, other
+# numbers get a sensible fixed number of decimals.
+.num_fmt <- function(x) {
+  if (!is.finite(x)) return("")
+  if (x == round(x) && abs(x) < 1e7)
+    return(formatC(x, format = "d", big.mark = ","))
+  ax <- abs(x)
+  digits <- if (ax >= 1e4 || ax < 1e-2) 3 else 2
+  formatC(x, format = "f", digits = digits, big.mark = ",")
+}
+
+#' Fill in any missing write-ups synchronously (blocking). Used at export time
+#' as a completeness backstop: the on-add background worker usually finishes
+#' first, but if the analyst exports while a job is still in flight (or one
+#' errored, or AI became available only later), this guarantees the downloaded
+#' report still carries the prose. A no-op when AI is unconfigured.
+report_finalise_writeups <- function(items) {
+  if (!ai_available()) return(items)
+  for (i in seq_along(items)) {
+    it <- items[[i]]
+    if (is.null(it$ai)) next
+    if (!is.null(it$writeup) && nzchar(it$writeup)) next
+    out <- tryCatch(
+      ai_report_writeup(it$ai$tables, it$ai$context %||% list(),
+                        it$ai$interpretation),
+      error = function(e) NULL)
+    if (!is.null(out)) items[[i]]$writeup <- out$text
+  }
+  items
 }
 
 # Build a polished flextable for a Table 1 object. Used by BOTH the Word report
@@ -125,7 +234,8 @@ tableone_flextable <- function(t1) {
   ft <- flextable::align(ft, j = "Characteristic", align = "left", part = "all")
   ft <- flextable::align(ft, j = value_cols, align = "center", part = "all")
   ft <- flextable::valign(ft, valign = "center", part = "all")
-  ft <- flextable::padding(ft, padding.top = 3, padding.bottom = 3,
+  ft <- flextable::line_spacing(ft, space = 1, part = "all")
+  ft <- flextable::padding(ft, padding.top = 1, padding.bottom = 1,
                            padding.left = 6, padding.right = 6, part = "all")
   ft <- flextable::font(ft, fontname = "Calibri", part = "all")
   ft <- flextable::fontsize(ft, size = 10, part = "all")
@@ -145,7 +255,12 @@ tableone_flextable <- function(t1) {
     ft <- flextable::italic(ft, i = 1, part = "footer")
     ft <- flextable::color(ft, color = "grey30", part = "footer")
   }
-  flextable::autofit(ft)
+  ft <- flextable::autofit(ft)
+  # Wide across-time tables (a column per visit) would otherwise run past the
+  # page margins in Word; constrain them to fill - and stay within - the page.
+  if (ncol(df) > 8L)
+    ft <- flextable::set_table_properties(ft, layout = "autofit", width = 1)
+  ft
 }
 
 .add_table1 <- function(doc, t1) {

@@ -30,7 +30,7 @@ suppressPackageStartupMessages({ library(shiny); library(ggplot2) })
 # has already loaded instrumented copies into its test environment; re-sourcing
 # here would replace them with uninstrumented global copies.
 if (!isTRUE(getOption("sabali_coverage"))) {
-  for (.f in list.files("R", pattern = "[.][Rr]$", full.names = TRUE)) {
+  for (.f in list.files("R", pattern = "^[^_].*[.][Rr]$", full.names = TRUE)) {
     source(.f, local = FALSE)
   }
 }

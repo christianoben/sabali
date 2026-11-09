@@ -243,20 +243,33 @@ cox_assumptions <- function(fit, mf, event_label) {
   notes <- survival_assumptions(mf, event_label)
   events <- sum(mf$.__surv_status == 1L)
   p_count <- length(stats::coef(fit))
-  if (p_count > 0 && events / p_count < 10)
-    notes[[length(notes) + 1]] <- list(note = sprintf(
-      "There were %d events for %d model coefficient%s; estimates may be unstable when events per coefficient is low.",
-      events, p_count, if (p_count == 1) "" else "s"))
+  if (p_count > 0) {
+    epv <- events / p_count
+    notes[[length(notes) + 1]] <- assumption_result("events_per_variable",
+      if (epv >= 10) "ok" else if (epv >= 5) "review" else "violated",
+      sprintf("There were %d events for %d model coefficient%s (%.1f per coefficient)%s.",
+              events, p_count, if (p_count == 1) "" else "s", epv,
+              if (epv >= 10) "" else
+                "; below ten per coefficient, estimates and intervals become unreliable"),
+      statistic = epv, detail = list(events = events, coefficients = p_count))
+  }
   if (is.null(zph)) {
-    notes[[length(notes) + 1]] <- list(note = "The proportional-hazards Schoenfeld residuals test could not be evaluated.")
+    notes[[length(notes) + 1]] <- assumption_result("proportional_hazards", "untested",
+      "The proportional-hazards Schoenfeld residuals test could not be evaluated.")
   } else {
     global_row <- which(rownames(zph$table) == "GLOBAL")
     if (length(global_row)) {
       p <- zph$table[global_row[1], "p"]
-      notes[[length(notes) + 1]] <- list(note = sprintf(
-        "Global proportional-hazards test p = %s: %s.", p_fmt(p),
-        if (is.finite(p) && p < 0.05) "evidence of time-varying effects; review stratified or time-varying alternatives"
-        else "no strong evidence against proportional hazards"))
+      sev <- if (!is.finite(p)) "untested"
+             else if (p >= 0.05) "ok" else if (p >= 0.01) "review" else "violated"
+      notes[[length(notes) + 1]] <- assumption_result("proportional_hazards", sev,
+        sprintf("Global proportional-hazards test p = %s: %s.", p_fmt(p),
+                switch(sev,
+                  ok = "no strong evidence against proportional hazards",
+                  review = "some evidence of time-varying effects",
+                  violated = "clear evidence of time-varying effects; review stratified or time-varying alternatives",
+                  "not evaluated")),
+        p = p, test = "cox.zph")
     }
   }
   notes

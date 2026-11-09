@@ -843,6 +843,16 @@ run_mixed_anova <- function(df, outcome, group, within, subject, alpha = 0.05) {
     interpretation = sig_phrase(target$p, alpha, "between-by-within interaction"),
     note = "A random intercept accounts for repeated observations within subjects; coefficient-level Wald p-values are shown for the fixed effects.")
   primary$terms_table <- terms
+  # Report the subject random-intercept variance decomposition and its ICC
+  # alongside the fixed-effect terms (mixed_variance_components() lives in
+  # fct_models.R and is sourced into the same package namespace).
+  rc <- tryCatch(mixed_variance_components(fitted$fit, "continuous"),
+                 error = function(e) NULL)
+  if (!is.null(rc)) {
+    primary$variance_table <- rc$table
+    if (!is.null(rc$icc_label) && is.finite(rc$icc))
+      primary$icc <- stats::setNames(rc$icc, rc$icc_label)
+  }
 
   ranked <- .mixed_fit(rank(d$y, ties.method = "average"), d$group,
                        d$within, d$subject)

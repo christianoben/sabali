@@ -99,17 +99,29 @@ bad_file <- function(df, ext = ".csv") {
   else saveRDS(df, f)
   f
 }
-cases <- list(
-  empty = structure(list(), class = "data.frame", row.names = integer()),
+# A truly empty table (no columns) is fatal: there is nothing to load.
+ok("empty (no-column) file fails with an analyst-friendly message", {
+  f <- bad_file(structure(list(), class = "data.frame", row.names = integer()))
+  e <- friendly_error(read_any_format(f, basename(f)))
+  stopifnot(is.character(e), !is.na(e), nchar(e) > 10,
+            !grepl("subscript out of bounds|object .* not found", e, ignore.case = TRUE))
+})
+
+# Data-quality issues must NOT block loading - the file loads and carries an
+# advisory `import_warnings` attribute instead of throwing. (Real exports,
+# especially wide clinical/REDCap files, routinely contain constant or
+# all-missing columns; refusing the whole file over them is wrong.)
+quality_cases <- list(
   single_column = data.frame(only = 1:4),
   all_missing = data.frame(a = 1:4, missing = c(NA, NA, NA, NA)),
   constant = data.frame(a = 1:4, constant = 1L))
-for (nm in names(cases)) {
-  f <- bad_file(cases[[nm]])
-  e <- friendly_error(read_any_format(f, basename(f)))
-  ok(sprintf("%s file fails with an analyst-friendly message", nm), {
-    stopifnot(is.character(e), !is.na(e), nchar(e) > 10,
-              !grepl("subscript out of bounds|object .* not found", e, ignore.case = TRUE))
+for (nm in names(quality_cases)) {
+  f <- bad_file(quality_cases[[nm]])
+  ok(sprintf("%s file LOADS with an advisory warning, not an error", nm), {
+    got <- read_any_format(f, basename(f))
+    warns <- attr(got, "import_warnings", exact = TRUE)
+    stopifnot(is.data.frame(got), nrow(got) == 4L,
+              length(warns) >= 1L, is.character(warns), any(nchar(warns) > 10))
   })
 }
 ok("missing source file fails without exposing a raw R path error", {

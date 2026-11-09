@@ -44,39 +44,26 @@ read_any_format <- function(path, orig_name = path) {
   # haven brings in 'labelled' columns from SPSS/Stata; convert to plain
   # factors/numerics so the rest of the app sees ordinary R types.
   df <- .strip_haven_labels(df, keep_labels = TRUE)
-  .validate_imported_data(df)
+  # Treat blank / whitespace-only cells as missing (see .blanks_to_na).
+  df <- .blanks_to_na(df)
+  # Only genuinely fatal problems stop the load; everything else is advisory.
+  .assert_loadable(df)
+  warns <- .import_warnings(df)
+  if (length(warns)) attr(df, "import_warnings") <- warns
   df
 }
 
-# Fail early on files that cannot support a meaningful analysis.  These checks
-# deliberately happen after import so the same analyst-friendly messages are
-# used for CSV, RDS, Excel and labelled statistical-file inputs.
-.validate_imported_data <- function(df) {
+#' Fatal structural checks: a file that trips these cannot be loaded at all.
+#' Deliberately narrow - a table with rows and columns and valid text loads,
+#' even if some columns are constant or empty (those are advisory, see
+#' .import_warnings). Kept after import so the messages are format-agnostic.
+.assert_loadable <- function(df) {
   if (!nrow(df) || !ncol(df))
     stop("The file contains no data rows or columns.", call. = FALSE)
-  if (ncol(df) < 2L)
-    stop("The file contains only one column. Please select a table with at least two columns for analysis.",
-         call. = FALSE)
 
-  all_missing <- names(df)[vapply(df, function(x) all(is.na(x)), logical(1))]
-  if (length(all_missing))
-    stop(sprintf("The following column%s contain only missing values: %s. Remove %s or provide usable values.",
-                 if (length(all_missing) == 1) "" else "s",
-                 paste(all_missing, collapse = ", "),
-                 if (length(all_missing) == 1) "it" else "them"), call. = FALSE)
-
-  constant <- names(df)[vapply(df, function(x) {
-    z <- x[!is.na(x)]
-    length(z) > 0L && length(unique(z)) <= 1L
-  }, logical(1))]
-  if (length(constant))
-    stop(sprintf("The following column%s have only one observed value: %s. A constant column cannot support a comparison or model.",
-                 if (length(constant) == 1) "" else "s",
-                 paste(constant, collapse = ", ")), call. = FALSE)
-
-  # Imported text must be representable as UTF-8 before it reaches Shiny or
+  # Imported text must be representable as UTF-8 before it reaches Shiny or the
   # JSON/Word exporters. `sub = NA` turns an invalid byte sequence into an
-  # explicit failure rather than silently replacing a category label.
+  # explicit failure rather than silently corrupting a category label.
   bad_text <- names(df)[vapply(df, function(x) {
     if (!is.character(x)) return(FALSE)
     y <- suppressWarnings(iconv(x, from = "", to = "UTF-8", sub = NA_character_))
@@ -87,6 +74,67 @@ read_any_format <- function(path, orig_name = path) {
                  if (length(bad_text) == 1) "" else "s",
                  paste(bad_text, collapse = ", ")), call. = FALSE)
   invisible(TRUE)
+}
+
+#' Non-fatal data-quality notes surfaced to the analyst AFTER the data loads.
+#' A single column, all-missing columns, and constant columns are common in real
+#' exports (especially wide clinical/REDCap files) and must not block loading -
+#' the affected columns simply cannot be used in a comparison or model. Returns
+#' a character vector of messages (empty when the data is clean).
+.import_warnings <- function(df) {
+  msgs <- character(0)
+
+  if (ncol(df) < 2L)
+    msgs <- c(msgs, "The file has only one column; most analyses need at least two variables.")
+
+  all_missing <- names(df)[vapply(df, function(x) all(is.na(x)), logical(1))]
+  if (length(all_missing)) {
+    one <- length(all_missing) == 1
+    msgs <- c(msgs, sprintf("%d column%s contain%s only missing values and cannot be analysed: %s.",
+                            length(all_missing), if (one) "" else "s",
+                            if (one) "s" else "", .truncate_names(all_missing)))
+  }
+
+  constant <- names(df)[vapply(df, function(x) {
+    z <- x[!is.na(x)]; length(z) > 0L && length(unique(z)) <= 1L
+  }, logical(1))]
+  if (length(constant)) {
+    one <- length(constant) == 1
+    msgs <- c(msgs, sprintf("%d column%s ha%s only one observed value (constant) and cannot be used in a comparison or model: %s.",
+                            length(constant), if (one) "" else "s",
+                            if (one) "s" else "ve", .truncate_names(constant)))
+  }
+  msgs
+}
+
+# Keep long column lists readable in a notification.
+.truncate_names <- function(x, n = 12L) {
+  if (length(x) <= n) return(paste(x, collapse = ", "))
+  paste0(paste(utils::head(x, n), collapse = ", "),
+         sprintf(", and %d more", length(x) - n))
+}
+
+# CSV/Excel exports - REDCap in particular - routinely store a missing value as
+# an empty ("") or whitespace-only string rather than a true NA. Left as-is,
+# "" counts as a distinct category, so a genuinely BINARY field (e.g.
+# "Colonized" / "Not colonized" with some blanks) is mis-detected as nominal
+# with three "levels" - and a nominal variable is then hidden from every
+# analysis that needs a continuous/count/binary outcome (Tests location &
+# proportion families, Regression, Advanced models). Normalising blanks to NA on
+# import keeps type detection, outcome options and missingness all correct.
+.blanks_to_na <- function(df) {
+  for (nm in names(df)) {
+    x <- df[[nm]]
+    if (is.character(x)) {
+      blank <- !is.na(x) & trimws(x) == ""
+      if (any(blank)) { x[blank] <- NA_character_; df[[nm]] <- x }
+    } else if (is.factor(x) && any(trimws(levels(x)) == "")) {
+      y <- as.character(x)
+      y[!is.na(y) & trimws(y) == ""] <- NA_character_
+      df[[nm]] <- factor(y)                       # drops the now-empty level
+    }
+  }
+  df
 }
 
 # Load the first data frame found inside an .rda / .RData file.

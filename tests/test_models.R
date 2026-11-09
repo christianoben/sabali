@@ -152,6 +152,7 @@ ok("Models tab renders coefficients and adds report items", {
       session$setInputs(outcome = "y", method = "ols", predictors = "x")
       session$flushReact(); session$setInputs(run = 1); session$flushReact()
       rendered <<- output$coefficients
+      session$setInputs(include_diag = TRUE); session$flushReact()
       session$setInputs(add = 1); session$flushReact()
     })
   stopifnot(is.character(rendered), grepl("Estimate", rendered, fixed = TRUE),

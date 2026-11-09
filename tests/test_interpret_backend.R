@@ -17,7 +17,7 @@ local({
 
 .clear_ai_env <- function()
   Sys.unsetenv(c("AI_INTERPRET_ENDPOINT", "AI_INTERPRET_KEY",
-                 "AI_INTERPRET_MODEL", "OPENCODE_API_KEY"))
+                 "AI_INTERPRET_MODEL", "AI_INTERPRET_THINKING", "OPENCODE_API_KEY"))
 .clear_ai_env()
 
 coef_tab <- data.frame(
@@ -46,6 +46,50 @@ ok("generic AI_INTERPRET_* overrides the OpenCode default", {
   cfg <- ai_backend_config(); .clear_ai_env()
   stopifnot(identical(cfg$endpoint, "https://on-prem.example/v1/chat/completions"),
             identical(cfg$model, "local-llm"))
+})
+
+ok("AI_INTERPRET_THINKING is carried into the config, empty when unset", {
+  .clear_ai_env()
+  Sys.setenv(AI_INTERPRET_ENDPOINT = "https://on-prem.example/v1/chat/completions")
+  off <- ai_backend_config()$thinking
+  Sys.setenv(AI_INTERPRET_THINKING = "disabled")
+  on <- ai_backend_config()$thinking
+  .clear_ai_env()
+  stopifnot(identical(off, ""), identical(on, "disabled"))
+})
+
+cat("\n== pinned-temperature providers ==\n")
+ok(".ai_rejects_temperature() fires only on a temperature complaint", {
+  fake <- function(body) list(resp = httr2::response(
+    status_code = 400L, headers = list(`Content-Type` = "application/json"),
+    body = charToRaw(body)))
+  stopifnot(
+    isTRUE(.ai_rejects_temperature(fake(
+      '{"error":{"message":"invalid temperature: only 1 is allowed for this model"}}'))),
+    isFALSE(.ai_rejects_temperature(fake(
+      '{"error":{"message":"model not found"}}'))))
+})
+ok("the retry body drops temperature; thinking rides only when configured", {
+  cfg <- list(model = "m", key = "", thinking = "disabled")
+  first <- .llm_body(cfg, "sys", "user", temperature = 0.2)
+  retry <- .llm_body(cfg, "sys", "user", temperature = NULL)
+  plain <- .llm_body(list(model = "m", key = "", thinking = ""), "sys", "user", 0.2)
+  stopifnot(
+    identical(first$temperature, 0.2), is.null(retry$temperature),
+    identical(first$thinking, list(type = "disabled")),
+    identical(retry$thinking, list(type = "disabled")),
+    is.null(plain$thinking), identical(plain$temperature, 0.2),
+    identical(retry$model, "m"), length(retry$messages) == 2L)
+})
+
+ok("the planner gets a longer timeout than a results-table interpretation", {
+  # A 51-variable dataset (data/messy_cross_sectional_dataset.csv) plus the full
+  # test catalogue takes the model past a one-minute budget, so the planner must
+  # not share the interpreter's default.
+  stopifnot(AI_CHAT_TIMEOUT_S == 60, AI_PLAN_TIMEOUT_S > AI_CHAT_TIMEOUT_S,
+            identical(formals(.llm_chat)$timeout, as.name("AI_CHAT_TIMEOUT_S")),
+            grepl("AI_PLAN_TIMEOUT_S", paste(deparse(body(plan_via_llm)),
+                                             collapse = " ")))
 })
 
 cat("\n== no offline fallback (loopback only - no egress) ==\n")

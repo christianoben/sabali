@@ -39,6 +39,10 @@ optional <- c(
   "styler",     # style verification gate
   "urca",       # exact unit-root tests + Zivot-Andrews break test (time series)
   "rugarch",    # GARCH volatility model (time series)
+  "mice",       # multiple imputation for missing data (Regression tab)
+  "lavaan",     # observed-variable path analysis / mediation (Advanced models)
+  "survey",     # design-based estimation for weighted / stratified / clustered
+                # samples (the Data tab's complex-sample design declaration)
   "shinymanager", # login layer when serving over a network (see DEPLOYMENT.md)
   "getPass"     # hidden password entry for setup_auth.R (optional convenience)
 )

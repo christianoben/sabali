@@ -10,7 +10,7 @@ local({
 
 suppressPackageStartupMessages(library(htmltools))
 .clear_ai <- function() Sys.unsetenv(c("AI_INTERPRET_ENDPOINT", "AI_INTERPRET_KEY",
-                                      "AI_INTERPRET_MODEL", "OPENCODE_API_KEY"))
+                                      "AI_INTERPRET_MODEL", "AI_INTERPRET_THINKING", "OPENCODE_API_KEY"))
 .clear_ai()
 
 cat("\n== planner catalogue integrity ==\n")

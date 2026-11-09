@@ -19,7 +19,7 @@ local({
 # OPENCODE_API_KEY, which would otherwise switch the engine into live mode).
 .clear_ai_env <- function()
   Sys.unsetenv(c("AI_INTERPRET_ENDPOINT", "AI_INTERPRET_KEY",
-                 "AI_INTERPRET_MODEL", "OPENCODE_API_KEY"))
+                 "AI_INTERPRET_MODEL", "AI_INTERPRET_THINKING", "OPENCODE_API_KEY"))
 .clear_ai_env()
 
 fit_tab <- data.frame(

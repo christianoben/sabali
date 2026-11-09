@@ -226,26 +226,35 @@ build_table_one <- function(df, vars, strata = NULL, types = NULL, opts = list()
 }
 
 # Chronological order of a time/visit variable. Numeric or date times sort
-# naturally; labelled visits ("Baseline", "6 months", ...) have no sortable
-# order, so we use their order of first appearance in the data - long-format
-# panel data is stored chronologically within subject by convention.
+# naturally; an ordered factor carries its own declared order (e.g. an ordinal
+# visit "Baseline" < "6 months" < ...), which we respect regardless of row
+# order; a plain labelled visit has no sortable order, so we fall back to its
+# order of first appearance in the data - long-format panel data is stored
+# chronologically within subject by convention.
 .t1_time_order <- function(x) {
   if (inherits(x, c("Date", "POSIXct", "POSIXt")) || is.numeric(x))
     as.character(sort(unique(x[!is.na(x)])))
+  else if (is.ordered(x))
+    intersect(levels(x), as.character(unique(x[!is.na(x)])))
   else
     unique(as.character(x[!is.na(x)]))
 }
 
 # One row per subject at their earliest time point (baseline). For numeric/date
-# times this is the minimum; for labelled visits it is the subject's first row
-# in data order (the chronological convention above).
+# times this is the minimum; for an ordered factor it is the lowest declared
+# level; for a plain labelled visit it is the subject's first row in data order
+# (the chronological convention above).
 tableone_baseline <- function(df, id, time) {
   if (is.null(id) || is.null(time) || !all(c(id, time) %in% names(df)))
     stop("A baseline table needs the subject-ID and time columns (declare them on the Data tab).",
          call. = FALSE)
   tx <- df[[time]]
   ord <- if (inherits(tx, c("Date", "POSIXct", "POSIXt")) || is.numeric(tx))
-    order(df[[id]], tx) else order(df[[id]])   # order() is stable -> keeps data order
+    order(df[[id]], tx)
+  else if (is.ordered(tx))
+    order(df[[id]], as.integer(tx))            # earliest declared level per subject
+  else
+    order(df[[id]])                            # order() is stable -> keeps data order
   d <- df[ord, , drop = FALSE]
   d[!duplicated(d[[id]]), , drop = FALSE]
 }

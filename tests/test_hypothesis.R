@@ -262,7 +262,13 @@ ok("Kendall reported as 'extra'",
 ok("both variables normal -> recommends Pearson (primary)",
    stopifnot(rk$recommended == "primary"))
 ok("non-normal -> recommends Spearman (alternative)", {
-  xn <- (1:30)^2; yn <- (1:30)^2 + (1:30)
+  # The normality verdict is now driven by the SHAPE of the distribution rather
+  # than by Shapiro-Wilk's p-value. (1:30)^2 has a skewness of only 0.62, which
+  # Shapiro rejected (it is a deterministic sequence, so the test is very
+  # sensitive) but which is genuinely mild - Pearson is fine there. Use data
+  # that is actually badly skewed to test the reroute.
+  set.seed(77)
+  xn <- rexp(60, 1)^2; yn <- rexp(60, 1)^2
   stopifnot(run_correlation(xn, yn)$recommended == "alternative")
 })
 

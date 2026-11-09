@@ -45,7 +45,8 @@ mod_interpret_ui <- function(id, title = "AI interpretation") {
   )
 }
 
-mod_interpret_server <- function(id, payload, audit = NULL) {
+mod_interpret_server <- function(id, payload, audit = NULL,
+                                 ai_runner = ai_async_run) {
   shiny::moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -58,50 +59,87 @@ mod_interpret_server <- function(id, payload, audit = NULL) {
       shiny::tags$pre(style = "white-space:pre-wrap;", text)
     }
 
-    result <- shiny::eventReactive(input$go, {
+    # TRUE when the last click had no result tables to interpret (handled
+    # synchronously, without troubling a worker).
+    empty_flag <- shiny::reactiveVal(FALSE)
+
+    # The most recent SUCCESSFUL interpretation, kept so that "Add to report"
+    # can reuse it (and skip pass 1 of the write-up) instead of recomputing.
+    # Stores the text alongside the payload it was produced from, so callers can
+    # confirm it still matches the analysis on screen before trusting it.
+    last_interp <- shiny::reactiveVal(NULL)
+    last_payload <- shiny::reactiveVal(NULL)
+
+    # The interpretation runs in a background worker (see fct_async.R) so the
+    # session stays responsive while the AI is thinking.
+    interp_task <- shiny::ExtendedTask$new(
+      function(payload) ai_runner("interpret", payload))
+
+    shiny::observeEvent(input$go, {
       p <- tryCatch(payload(), error = function(e) NULL)
       tables <- p$tables %||% list()
-      # keep only non-empty data frames
       tables <- tables[vapply(tables, function(t)
         is.data.frame(t) && nrow(t) > 0, logical(1))]
-      if (!length(tables))
-        return(list(text = NULL,
-                    source = NULL,
-                    empty = TRUE))
+      if (!length(tables)) { empty_flag(TRUE); return() }
+      empty_flag(FALSE)
+      last_payload(list(tables = tables, context = p$context %||% list()))
       if (is.function(audit)) {
         audit("interpreter_metadata_sent", fields = names(tables),
               n_rows = sum(vapply(tables, nrow, integer(1))),
               n_columns = length(tables))
       }
-      res <- tryCatch(
-        ai_interpret(tables, p$context %||% list()),
-        error = function(e) list(text = paste("Could not interpret the results:",
-                                              conditionMessage(e)),
-                                 source = "error"))
-      res$empty <- FALSE
-      res
+      interp_task$invoke(list(tables = tables, context = p$context %||% list()))
+    })
+
+    # Normalised outcome: NULL while idle/running, else list(ok, value|error).
+    interp_outcome <- shiny::reactive({
+      st <- interp_task$status()
+      if (identical(st, "success")) interp_task$result()
+      else if (identical(st, "error"))
+        list(ok = FALSE, error = tryCatch({ interp_task$result(); "unknown error" },
+                                          error = function(e) conditionMessage(e)))
+      else NULL
+    })
+
+    output$busy <- shiny::renderUI({
+      if (identical(interp_task$status(), "running"))
+        shiny::div(class = "alert alert-info", style = "margin-top:8px;",
+          shiny::icon("spinner", class = "fa-spin"),
+          " Interpreting... you can keep working in other tabs; the result will appear here when it is ready.")
     })
 
     output$out <- shiny::renderUI({
-      shiny::req(result())
-      r <- result()
-      if (isTRUE(r$empty))
+      if (isTRUE(empty_flag()))
         return(shiny::div(class = "alert alert-warning",
-                          "There are no result tables to interpret yet. Run the analysis first, then try again."))
+          "There are no result tables to interpret yet. Run the analysis first, then try again."))
+      o <- interp_outcome()
+      if (is.null(o)) return(NULL)
+      # An AI error is shown inline (as before) rather than crashing the panel.
+      text <- if (isTRUE(o$ok)) o$value$text
+              else paste("Could not interpret the results:", o$error)
+      if (is.null(text) || !nzchar(text)) return(NULL)
       shiny::div(
         style = "margin-top:10px; padding:10px 14px; background:#fff; border:1px solid #dfeceb; border-radius:4px;",
-        render_md(r$text)
-      )
+        render_md(text))
     })
 
     output$source <- shiny::renderUI({
-      shiny::req(result())
-      r <- result()
-      if (isTRUE(r$empty) || is.null(r$source)) return(NULL)
+      if (isTRUE(empty_flag())) return(NULL)
+      o <- interp_outcome()
+      if (is.null(o) || !isTRUE(o$ok) || is.null(o$value$source)) return(NULL)
       shiny::tags$small(style = "color:#5a726f; display:block; margin-top:6px;",
-                        shiny::icon("shield-alt"), " Source: ", r$source, ".")
+                        shiny::icon("shield-alt"), " Source: ", o$value$source, ".")
     })
 
-    invisible(NULL)
+    # Remember the last good interpretation (with the payload behind it).
+    shiny::observe({
+      o <- interp_outcome()
+      if (!is.null(o) && isTRUE(o$ok) && !is.null(o$value$text) && nzchar(o$value$text))
+        last_interp(list(text = o$value$text, payload = last_payload()))
+    })
+
+    # Accessor for the parent: reactive giving list(text, payload) of the most
+    # recent successful interpretation, or NULL if the tab was never interpreted.
+    list(interpretation = shiny::reactive(last_interp()))
   })
 }

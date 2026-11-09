@@ -206,10 +206,14 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
                         show_missing = isTRUE(input$t1_missing), title = title))
         } else {
           shiny::req(ps$time, length(vars) > 0)
-          # Guard against a near-continuous time variable exploding into columns.
+          # An across-time table needs at least two distinct time points to have
+          # more than one column. There is no upper bound: the table renders a
+          # column per distinct visit however many there are (wide tables scroll
+          # horizontally in the preview and the report).
           n_tp <- nlevels(droplevels(as.factor(t1_data()[[ps$time]])))
-          shiny::validate(shiny::need(n_tp >= 2 && n_tp <= 12,
-            "The time variable has too many (or too few) distinct values to tabulate as columns. Use discrete visits/waves, or bin the time variable."))
+          shiny::validate(shiny::need(n_tp >= 2, sprintf(
+            "The visit/time variable '%s' has only %d distinct value; an across-time table needs at least 2 time points. Pick a variable that varies over visits.",
+            ps$time, n_tp)))
           build_table_one(t1_data(), vars, strata = ps$time, types = t1_types(),
             opts = list(cont_style = cont, show_p = FALSE,
                         show_overall = isTRUE(input$t1_overall_evo),
@@ -233,11 +237,32 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
       info
     })
 
+    # Evaluate the summary-table object, distinguishing three states so the UI
+    # can react appropriately:
+    #   "ok"      -> the built table object (value = the object)
+    #   "message" -> a validation message to show the user (e.g. too many
+    #                time-point columns); value = the message text
+    #   "waiting" -> a silent req() short-circuit (nothing selected yet)
+    # Previously both note and body swallowed every error into NULL, so a
+    # genuine "too many time points" validation message was hidden behind a
+    # generic "pick variables" placeholder even after variables were chosen.
+    t1_status <- shiny::reactive({
+      tryCatch(list(state = "ok", value = t1_obj()),
+        error = function(e) {
+          msg <- conditionMessage(e)
+          if (nzchar(msg)) list(state = "message", value = msg)
+          else list(state = "waiting", value = NULL)
+        })
+    })
+
     output$note <- shiny::renderUI({
       if (identical(mode(), "table1")) {
-        t1 <- tryCatch(t1_obj(), error = function(e) NULL)
-        if (is.null(t1)) return(shiny::HTML("Pick one or more variables to build a summary table. Split by an outcome to add p-values."))
-        return(shiny::HTML(sprintf("<b>%s.</b> %s", t1$title, t1$note)))
+        st <- t1_status()
+        if (identical(st$state, "ok"))
+          return(shiny::HTML(sprintf("<b>%s.</b> %s", st$value$title, st$value$note)))
+        if (identical(st$state, "message"))
+          return(shiny::HTML(st$value))
+        return(shiny::HTML("Pick one or more variables to build a summary table. Split by an outcome to add p-values."))
       }
       info <- descr()
       shiny::HTML(sprintf("<b>%s</b> (type: %s). %s",
@@ -247,11 +272,15 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
     # Render the (variable number of) tables for this kind.
     output$body <- shiny::renderUI({
       if (identical(mode(), "table1")) {
-        if (is.null(tryCatch(t1_obj(), error = function(e) NULL)))
-          return(shiny::helpText("Select variables to summarise."))
-        return(shiny::tagList(
-          shiny::h6("Preview (this is how the table will appear in the downloaded report)"),
-          shiny::uiOutput(ns("t1_preview"))))
+        st <- t1_status()
+        if (identical(st$state, "ok"))
+          return(shiny::tagList(
+            shiny::h6("Preview (this is how the table will appear in the downloaded report)"),
+            shiny::uiOutput(ns("t1_preview"))))
+        # A validation message is shown in the note alert above; keep the body
+        # empty rather than contradicting it with "select variables".
+        if (identical(st$state, "message")) return(NULL)
+        return(shiny::helpText("Select variables to summarise."))
       }
       info <- descr()
       tags <- lapply(seq_along(info$tables), function(i) {
@@ -263,13 +292,16 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
       shiny::tagList(tags)
     })
     # WYSIWYG preview: render the SAME styled flextable used in the report.
+    # Wrapped in a horizontally-scrolling box so wide across-time tables (one
+    # column per visit - there can be many) stay readable instead of overflowing.
     output$t1_preview <- shiny::renderUI({
       shiny::req(identical(mode(), "table1"))
       t1 <- t1_obj()
-      if (requireNamespace("flextable", quietly = TRUE))
+      inner <- if (requireNamespace("flextable", quietly = TRUE))
         flextable::htmltools_value(tableone_flextable(t1))
       else
         shiny::tableOutput(ns("t1_preview_fallback"))
+      shiny::div(style = "overflow-x: auto; max-width: 100%;", inner)
     })
     output$t1_preview_fallback <- shiny::renderTable({
       shiny::req(identical(mode(), "table1"))
@@ -287,7 +319,7 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
       })
     })
 
-    mod_interpret_server("interpret", shiny::reactive({
+    interp_payload <- shiny::reactive({
       if (identical(mode(), "table1")) {
         t1 <- tryCatch(t1_obj(), error = function(e) NULL)
         if (is.null(t1)) return(list())
@@ -302,21 +334,43 @@ mod_descriptives_server <- function(id, data, types, outcomes = NULL, panel = NU
            context = list(title = sprintf("Descriptive summary of %s", info$var),
                           analysis = sprintf("Descriptive statistics (%s)", info$kind),
                           method = info$type))
-    }), audit = audit)
+    })
+    interp <- mod_interpret_server("interpret", interp_payload, audit = audit)
+
+    # Payload the report write-up worker needs, reusing the tab interpretation
+    # when the analyst already produced one for this same analysis.
+    ai_for_report <- function() {
+      p <- interp_payload()
+      if (!length(p$tables %||% list())) return(NULL)
+      list(tables = p$tables, context = p$context,
+           interpretation = interp_reuse_text(interp$interpretation(), p$context))
+    }
 
     shiny::observeEvent(input$add, {
       if (identical(mode(), "table1")) {
-        t1 <- t1_obj()
-        add_report(list(kind = "table1", title = t1$title, t1 = t1))
+        st <- t1_status()
+        if (!identical(st$state, "ok")) {
+          shiny::showNotification(
+            if (identical(st$state, "message")) st$value
+            else "Pick at least one variable before adding the summary table.",
+            type = "warning", duration = 6)
+          return()
+        }
+        t1 <- st$value
+        add_report(list(kind = "table1", title = t1$title, t1 = t1,
+                        ai = ai_for_report()))
         shiny::showNotification("Summary table added to report.",
                                 type = "message", duration = 3)
         return()
       }
       info <- descr()
-      for (nm in names(info$tables))
+      nms <- names(info$tables)
+      ai <- ai_for_report()   # one write-up, placed under the first table
+      for (k in seq_along(nms))
         add_report(list(kind = "table",
-                        caption = sprintf("%s [%s]", nm, info$var),
-                        data = info$tables[[nm]]))
+                        caption = sprintf("%s [%s]", nms[k], info$var),
+                        data = info$tables[[nms[k]]],
+                        ai = if (k == 1L) ai else NULL))
       shiny::showNotification("Added to report.", type = "message", duration = 3)
     })
   })

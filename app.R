@@ -25,9 +25,11 @@ if (nzchar(.explicit_auth_passphrase))
   Sys.setenv(SABALI_AUTH_PASSPHRASE = .explicit_auth_passphrase)
 rm(.explicit_auth_db, .explicit_auth_passphrase)
 
-# Shiny (>= 1.5.0) auto-sources ./R, but we source explicitly too so the app
-# works regardless of Shiny version and load order.
-for (.f in list.files("R", pattern = "[.][Rr]$", full.names = TRUE)) {
+# Shiny's automatic sourcing of ./R is disabled (see R/_disable_autoload.R):
+# this directory ships a DESCRIPTION/NAMESPACE, so autoload would warn and
+# double-source. We therefore source the R/*.R files ourselves here, skipping
+# the leading-underscore sentinel (and any other private helper file).
+for (.f in list.files("R", pattern = "^[^_].*[.][Rr]$", full.names = TRUE)) {
   source(.f, local = FALSE)
 }
 
@@ -43,6 +45,11 @@ if (length(.missing) > 0) {
 
 # Allow larger uploads (default is 5 MB).
 options(shiny.maxRequestSize = 200 * 1024^2)
+
+# Warm a small background worker pool so the slow AI calls (planner /
+# interpreter) run off the main session thread and the app stays responsive.
+# Only when AI is actually configured - no point spawning workers otherwise.
+if (ai_available()) ai_async_setup()
 
 ui <- navbarPage(
   title = "Sabali",
@@ -67,16 +74,33 @@ ui <- navbarPage(
 
 server <- function(input, output, session) {
   # Per-session report store (keeps sessions independent for many users).
-  report_store <- reactiveValues(items = list())
-  add_report <- function(item) {
-    report_store$items <- c(report_store$items, list(item))
-  }
+  # next_id gives every item a stable handle so the background write-up worker
+  # can find the item it was launched for and patch its prose back in.
+  report_store <- reactiveValues(items = list(), next_id = 0L)
 
-  ds <- mod_data_server("data")
-  mod_datacheck_server("datacheck", data = ds$data, raw_data = ds$raw,
-                       data_name = ds$data_name, types = ds$types,
+  # Background AI write-up enrichment: when an item carrying an `ai` payload is
+  # added, a two-pass AI call (interpret-if-needed, then a Results-section prose
+  # write-up) runs off-thread and its result is stitched back onto the item.
+  # See report_enricher() in R/mod_report.R.
+  add_report <- report_enricher(report_store)
+
+  # The tab-0 Data contract can ENFORCE its allowed levels / numeric ranges:
+  # out-of-contract values are coerced to NA in the data every analysis tab
+  # uses. The contract is built from the PRE-enforcement data (ds$data_base) so
+  # there is no reactive cycle; its derived rules flow back through this shared
+  # reactiveVal into mod_data, which produces the enforced ds$data.
+  enforce_rules <- reactiveVal(list())
+  # Derived-variable specs travel the same way as the contract rules: tab 0 owns
+  # the list, mod_data applies it once, and every analysis tab sees the result.
+  derive_specs <- reactiveVal(list())
+  ds <- mod_data_server("data", enforce = enforce_rules, derive = derive_specs)
+  dc <- mod_datacheck_server("datacheck", data = ds$data_base, raw_data = ds$raw,
+                       data_name = ds$data_name, types = ds$types_base,
                        outcomes = ds$outcomes, panel = ds$panel,
+                       plan = ds$plan,
                        audit = ds$audit, audit_record = ds$audit_record)
+  observe(enforce_rules(dc$enforcement()))
+  observe(derive_specs(dc$transforms()))
   mod_descriptives_server("desc", data = ds$data, types = ds$types,
                           outcomes = ds$outcomes, panel = ds$panel,
                           add_report = add_report, audit = ds$audit_record)
@@ -89,10 +113,12 @@ server <- function(input, output, session) {
                    audit = ds$audit_record)
   mod_models_server("models", data = ds$data, types = ds$types,
                     outcomes = ds$outcomes, panel = ds$panel,
+                    survey = ds$survey,
                     plan_rec = ds$plan, add_report = add_report,
                     audit = ds$audit_record)
   mod_phase4_server("phase4", data = ds$data, types = ds$types,
                     outcomes = ds$outcomes, panel = ds$panel,
+                    survey = ds$survey,
                     plan_rec = ds$plan, add_report = add_report,
                     audit = ds$audit_record)
   observe({

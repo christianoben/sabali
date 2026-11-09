@@ -324,6 +324,10 @@ build_panel_chart <- function(df, spec, panel, trajectories = TRUE,
         ggplot2::stat_summary(ggplot2::aes(group = 1), fun.data = mean_se,
                               geom = "errorbar", width = 0.1,
                               colour = "#D55E00")
+      if (isTRUE(spec$data_labels))
+        p <- p + ggplot2::stat_summary(
+          ggplot2::aes(group = 1, label = ggplot2::after_stat(round(y, 1))),
+          fun = mean, geom = "text", vjust = -0.8, size = 3, colour = "#D55E00")
     } else {
       p <- p + ggplot2::stat_summary(ggplot2::aes(group = .data[[colour]],
                                                  colour = .data[[colour]]),
@@ -353,13 +357,18 @@ build_time_series_chart <- function(df, spec, panel, aggregate = TRUE) {
   p <- ggplot2::ggplot(d, ggplot2::aes(x = .data[[panel$time]], y = .data$.__panel_y)) +
     ggplot2::geom_line(ggplot2::aes(group = 1), colour = "#018786", alpha = 0.65) +
     ggplot2::geom_point(colour = "#018786", alpha = 0.65)
-  if (aggregate)
+  if (aggregate) {
     p <- p + ggplot2::stat_summary(ggplot2::aes(group = 1), fun = mean,
                                    geom = "line", linewidth = 1.2,
                                    colour = "#D55E00") +
       ggplot2::stat_summary(ggplot2::aes(group = 1), fun.data = mean_se,
                             geom = "errorbar", width = 0.1,
                             colour = "#D55E00")
+    if (isTRUE(spec$data_labels))
+      p <- p + ggplot2::stat_summary(
+        ggplot2::aes(group = 1, label = ggplot2::after_stat(round(y, 1))),
+        fun = mean, geom = "text", vjust = -0.8, size = 3, colour = "#D55E00")
+  }
   if (!is.null(spec$group) && spec$group %in% names(d))
     p <- p + ggplot2::facet_wrap(ggplot2::vars(.data[[spec$group]]))
   p + ggplot2::labs(title = if (nzchar(spec$title %||% "")) spec$title else "Time-series trend",

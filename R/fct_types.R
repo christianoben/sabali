@@ -71,6 +71,10 @@ detect_type <- function(x, name = NULL) {
         !any(is.na(suppressWarnings(as.Date(chr))))) {
       return("datetime")
     }
+    # Non-ISO but still date-shaped text ("apr-24", "9 Apr 2024", "04/2024",
+    # "13/02/2024", ...). The analyst confirms/adjusts the exact format in the
+    # "Confirm date formats" editor; here we only need to route it to datetime.
+    if (.looks_like_flexible_date(x_nonmiss)) return("datetime")
   }
 
   # Name-based identifier detection (only when a column name is supplied). An
@@ -131,7 +135,7 @@ factor_levels_of <- function(x) {
 
 #' Coerce a column to match a (possibly user-corrected) measurement type.
 #' Used after the confirm-types screen so downstream code gets consistent types.
-coerce_to_type <- function(x, type) {
+coerce_to_type <- function(x, type, format = "auto") {
   switch(
     type,
     continuous = suppressWarnings(as.numeric(x)),
@@ -139,7 +143,121 @@ coerce_to_type <- function(x, type) {
     binary     = as.factor(x),
     nominal    = as.factor(x),
     ordinal    = factor(x, ordered = TRUE),
-    datetime   = x,               # leave as-is; import already parsed
+    # Parse text dates into real Date/POSIXct using the chosen (or auto) format,
+    # so every downstream analysis recognises them. Already-parsed columns are
+    # returned unchanged by sabali_parse_dates().
+    datetime   = sabali_parse_dates(x, format)$value,
     x                              # identifier / text unchanged
   )
+}
+
+# --- wide-data triage -------------------------------------------------------
+
+#' Page size for the confirm-types editor.
+#'
+#' Wide clinical exports run to well over a thousand columns (a household
+#' survey extract measured here had 1,743), and rendering a type and base-level dropdown
+#' for every one of them at once builds thousands of widgets and megabytes of
+#' HTML before the analyst can touch anything. The editor therefore shows one
+#' page at a time.
+TYPE_EDITOR_PAGE_SIZE <- 25L
+
+#' Which columns cannot be analysed as they stand.
+#'
+#' All-missing and constant columns are reported by the importer already; they
+#' are separated out here so the "needs a look" filter does not drown in them.
+#' Nothing the analyst chooses on the types screen can make them usable, so they
+#' are not a decision - just a fact worth being able to find.
+types_unusable <- function(detected) {
+  if (is.null(detected) || !nrow(detected)) return(logical(0))
+  detected$missing_pct >= 100 | detected$distinct <= 1L
+}
+
+#' Which columns most likely need a type DECISION before analysis.
+#'
+#' Most columns in a wide export need no decision at all, so the editor can
+#' offer to show only the ones that usually do. This is a PROMPT, not a verdict -
+#' every row stays editable and the filter can be switched off. Flagged:
+#'
+#'  * small sets of whole numbers typed as counts. This is the commonest silent
+#'    error on REDCap exports: a radio or dropdown field exported as 1/2/3 is
+#'    indistinguishable from a count by shape alone, and left uncorrected it
+#'    enters a model as a linear number rather than as categories. Cross-checking
+#'    one 237-column electronic-capture export against its own data dictionary
+#'    found 61 such fields;
+#'  * columns detected as identifiers, which are excluded from analysis and so
+#'    are worth confirming.
+#'
+#' A `from_dictionary` column, when present, suppresses the flag: a type read
+#' from a REDCap data dictionary is stated, not inferred.
+#'
+#' Deliberately NOT flagged: all-missing and constant columns (see
+#' `types_unusable()`). Including them made the filter useless on a real
+#' 1,743-column extract, where 623 empty columns accounted for most of the 1,058
+#' hits and none of them could be acted on.
+#'
+#' @param detected A `detect_all_types()` data frame.
+#' @param max_codes Highest distinct count still treated as a possible code set.
+#' @return A logical vector, one element per row of `detected`.
+types_needing_attention <- function(detected, max_codes = 10L) {
+  if (is.null(detected) || !nrow(detected)) return(logical(0))
+  usable <- !types_unusable(detected)
+  coded <- detected$type == "count" & detected$distinct <= max_codes
+  flag <- usable & (coded | detected$type == "identifier")
+  # A column whose type came from a REDCap data dictionary is not a guess, so
+  # there is nothing for the analyst to decide about it.
+  if (!is.null(detected$from_dictionary))
+    flag <- flag & !as.logical(detected$from_dictionary)
+  flag
+}
+
+#' Short reason a column was flagged, for the UI.
+type_attention_reason <- function(type, distinct, missing_pct, max_codes = 10L) {
+  if (missing_pct >= 100) return("all values missing")
+  if (distinct <= 1L) return("only one observed value")
+  if (identical(type, "count") && distinct <= max_codes)
+    return(sprintf("%d whole numbers - a coded category?", distinct))
+  if (identical(type, "identifier")) return("looks like an ID")
+  ""
+}
+
+#' Rows of the confirm-types editor that pass the search box and the filter.
+#'
+#' Split out of the module so the filtering rule is testable on its own. The
+#' search is a literal, case-insensitive substring match rather than a pattern:
+#' a column name typed with a bracket or a dot should search, not raise a regex
+#' error.
+#'
+#' @param detected A `detect_all_types()` data frame.
+#' @param search   Substring to match against the variable name ("" = no filter).
+#' @param filter   "all", "attention" (`types_needing_attention()`) or
+#'                 "unusable" (`types_unusable()`).
+#' @return Integer row indices into `detected`.
+type_editor_rows <- function(detected, search = "", filter = "all") {
+  if (is.null(detected) || !nrow(detected)) return(integer(0))
+  keep <- rep(TRUE, nrow(detected))
+  q <- trimws(search %||% "")
+  if (nzchar(q))
+    keep <- keep & grepl(tolower(q), tolower(detected$variable), fixed = TRUE)
+  f <- filter %||% "all"
+  if (identical(f, "attention")) keep <- keep & types_needing_attention(detected)
+  if (identical(f, "unusable"))  keep <- keep & types_unusable(detected)
+  which(keep)
+}
+
+#' Number of pages a filtered row set needs.
+type_editor_n_pages <- function(rows, page_size = TYPE_EDITOR_PAGE_SIZE) {
+  max(1L, as.integer(ceiling(length(rows) / page_size)))
+}
+
+#' Slice a filtered row set down to one page.
+#'
+#' The requested page is clamped into range, so a stale page number left over
+#' from a wider filter shows the last page rather than nothing at all.
+type_editor_page_rows <- function(rows, page, page_size = TYPE_EDITOR_PAGE_SIZE) {
+  if (!length(rows)) return(integer(0))
+  n_pages <- type_editor_n_pages(rows, page_size)
+  p <- min(max(1L, as.integer(page)), n_pages)
+  from <- (p - 1L) * page_size + 1L
+  rows[seq.int(from, min(from + page_size - 1L, length(rows)))]
 }

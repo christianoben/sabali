@@ -18,7 +18,7 @@ SAMPLE <- file.path(ROOT, "data/lvct_cohort_repeated.csv")
 
 cat("\n== 1. Source all R/ files (parse + eval) ==\n")
 if (!isTRUE(getOption("sabali_coverage"))) {
-  for (f in list.files("R", pattern = "[.][Rr]$", full.names = TRUE))
+  for (f in list.files("R", pattern = "^[^_].*[.][Rr]$", full.names = TRUE))
     ok(paste("source", basename(f)), source(f, local = FALSE))
 } else {
   ok("instrumented source files are already loaded", TRUE)

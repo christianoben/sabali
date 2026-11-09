@@ -121,6 +121,14 @@ ok("mixed ANOVA fixed effects agree with the reference LMM", {
   ref <- lme4::fixef(mixed_ref); ref <- ref[names(ref) != "(Intercept)"]
   stopifnot(all.equal(unname(got[names(ref)]), unname(ref), tolerance = TOL_STAT))
 })
+ok("mixed ANOVA reports the subject variance components and ICC", {
+  vt <- mixed$primary$variance_table
+  vd <- as.data.frame(lme4::VarCorr(mixed_ref))
+  tau <- vd$vcov[vd$grp == "subject"]; sigma2 <- vd$vcov[vd$grp == "Residual"]
+  stopifnot(!is.null(vt), any(vt$Component == "Residual"),
+            "ICC (subject)" %in% names(mixed$primary$icc))
+  expect_close(unname(mixed$primary$icc), tau / (tau + sigma2), TOL_STAT)
+})
 
 set.seed(14)
 ac <- data.frame(group = factor(rep(c("A", "B"), each = 20)),

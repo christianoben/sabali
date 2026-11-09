@@ -12,7 +12,10 @@ FAMILY_LABELS <- c(
   cochran_q  = "Repeated binary outcomes (Cochran's Q)",
   correlation = "Correlation between two numbers",
   point_biserial = "Point-biserial correlation (binary vs numeric)",
-  proportion  = "One proportion vs a reference"
+  proportion  = "One proportion vs a reference",
+  diagnostic  = "Diagnostic / screening test accuracy (vs a reference standard)",
+  effects     = "Effect size for a binary outcome (risk difference, RR, OR, NNT)",
+  trend       = "Trend across an ordered exposure (dose-response)"
 )
 
 # Flatten a single test result into a tidy Field/Value table (for display+report)
@@ -37,6 +40,25 @@ result_to_df <- function(res) {
     )
     rows <- rbind(rows, term_rows)
   }
+  if (!is.null(res$variance_table) && nrow(res$variance_table)) {
+    vt <- res$variance_table
+    var_rows <- data.frame(
+      Field = paste0("Variance: ", vt$Component),
+      Value = vapply(seq_len(nrow(vt)), function(i) {
+        vals <- vt[i, setdiff(names(vt), "Component"), drop = FALSE]
+        paste(sprintf("%s = %s", names(vals),
+                      vapply(vals, function(v) formatC(v, digits = 4, format = "g"),
+                             character(1))),
+              collapse = "; ")
+      }, character(1)),
+      stringsAsFactors = FALSE)
+    rows <- rbind(rows, var_rows)
+  }
+  if (length(res$icc))
+    rows <- rbind(rows, data.frame(
+      Field = names(res$icc),
+      Value = formatC(as.numeric(res$icc), digits = 3, format = "f"),
+      stringsAsFactors = FALSE))
   if (length(res$effect))
     rows <- rbind(rows, data.frame(
       Field = names(res$effect),
@@ -357,7 +379,13 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
         )
       } else if (identical(family, "categorical")) {
         cat_design_choices <- c(
-          "Association between two categorical variables" = "association"
+          "Association between two categorical variables" = "association",
+          # Agreement is a different question from association: two measurements
+          # can be strongly associated yet disagree systematically, and can have
+          # identical margins yet disagree on every case. Concordance questions
+          # - two raters, two sites, test vs reference - are this one.
+          "Agreement between two measurements of the same cases (Cohen's kappa)" =
+            "agreement"
         )
         if (panel_has_subject_time(panel_spec()) &&
             length(cochran_available_outcomes()) > 0)
@@ -379,6 +407,25 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
           shiny::radioButtons(ns("cat_design"), "Categorical design",
                               choices = cat_design_choices,
                               selected = selected_cat_design),
+          if (identical(selected_cat_design, "agreement")) shiny::tagList(
+            shiny::selectizeInput(ns("agree_raters"),
+              "Columns holding the repeated measurements",
+              choices = cat_vars(), multiple = TRUE,
+              selected = shiny::isolate(input$agree_raters),
+              options = list(placeholder = "Pick two columns, or three or more for a panel")),
+            shiny::helpText(
+              "Two columns give Cohen's kappa - agreement between that specific ",
+              "pair. Three or more give Fleiss' kappa, which measures how far a ",
+              "panel agrees as a whole and is not the average of the pairwise ",
+              "Cohen's kappas."),
+            shiny::selectInput(ns("kappa_weights"), "Category weighting",
+                               choices = AGREEMENT_WEIGHTS,
+                               selected = shiny::isolate(input$kappa_weights) %||%
+                                 "unweighted"),
+            shiny::helpText(
+              "Use weights only when the categories are ORDERED, so that a ",
+              "near miss counts as partial agreement. With two categories every ",
+              "scheme gives the same answer.")),
           shiny::conditionalPanel(
             sprintf("input['%s'] == 'association'", ns("cat_design")),
             shiny::selectInput(ns("x"), "Variable 1", choices = cat_vars()),
@@ -413,6 +460,48 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
           else
             shiny::helpText("Requires at least three repeated conditions/time points and one observation per subject-condition pair. Incomplete subject blocks are excluded.")
         )
+      } else if (identical(family, "effects")) {
+        shiny::tagList(
+          shiny::helpText(shiny::strong("How much, not just whether."), " ",
+            "A chi-square test says the groups differ; these measures say by ",
+            "how much, on the three scales that answer different questions."),
+          shiny::selectInput(ns("eff_outcome"), "Binary outcome",
+                             choices = cat_vars(),
+                             selected = shiny::isolate(input$eff_outcome)),
+          shiny::selectInput(ns("eff_group"), "Group / exposure (two levels)",
+                             choices = cat_vars(),
+                             selected = shiny::isolate(input$eff_group)),
+          shiny::uiOutput(ns("eff_levels_ui")))
+      } else if (identical(family, "trend")) {
+        shiny::tagList(
+          shiny::helpText(shiny::strong("For an ORDERED exposure"), " - a dose, ",
+            "a wealth quintile, an age band, a duration. Asks whether risk ",
+            "moves consistently with the level, which a chi-square test cannot."),
+          shiny::selectInput(ns("tr_outcome"), "Binary outcome",
+                             choices = cat_vars(),
+                             selected = shiny::isolate(input$tr_outcome)),
+          shiny::selectInput(ns("tr_exposure"), "Ordered exposure (3+ levels)",
+                             choices = c(cat_vars(), num_vars()),
+                             selected = shiny::isolate(input$tr_exposure)),
+          shiny::uiOutput(ns("tr_positive_ui")))
+      } else if (identical(family, "diagnostic")) {
+        pool <- cat_vars()
+        shiny::tagList(
+          shiny::helpText(shiny::strong("Directional, unlike agreement."), " ",
+            "One variable is the reference standard the other is judged against, ",
+            "so which is which matters."),
+          shiny::selectInput(ns("dx_test"), "Test being evaluated",
+                             choices = pool,
+                             selected = shiny::isolate(input$dx_test)),
+          shiny::selectInput(ns("dx_ref"), "Reference standard",
+                             choices = pool,
+                             selected = shiny::isolate(input$dx_ref)),
+          shiny::uiOutput(ns("dx_positive_ui")),
+          shiny::helpText(
+            "Predictive values are also recomputed across a range of ",
+            "prevalences, because PPV and NPV depend on how common the ",
+            "condition is where the test is used - they do not transfer from ",
+            "one setting to another."))
       } else if (identical(family, "proportion")) {
         shiny::tagList(
           shiny::selectInput(ns("outcome"), "Binary outcome", choices = proportion_outcomes()),
@@ -466,6 +555,58 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
         choices = setdiff(pool, input$x), selected = sel)
     }, ignoreNULL = TRUE)
 
+    output$eff_levels_ui <- shiny::renderUI({
+      shiny::req(identical(input$family, "effects"), input$eff_outcome,
+                 input$eff_group)
+      df <- data()
+      olv <- levels(droplevels(as.factor(df[[input$eff_outcome]])))
+      glv <- levels(droplevels(as.factor(df[[input$eff_group]])))
+      msg <- function(what, lv) shiny::div(class = "alert alert-warning",
+        style = "padding:8px 10px;",
+        sprintf("The %s has %d observed values (%s); exactly two are needed.",
+                what, length(lv), paste(utils::head(lv, 5), collapse = ", ")))
+      if (length(olv) != 2L) return(msg("outcome", olv))
+      if (length(glv) != 2L) return(msg("group", glv))
+      shiny::tagList(
+        shiny::selectInput(ns("eff_positive"), "Which outcome value is the EVENT?",
+                           choices = olv,
+                           selected = shiny::isolate(input$eff_positive) %||% olv[[2]]),
+        shiny::selectInput(ns("eff_exposed"), "Which group is EXPOSED / intervention?",
+                           choices = glv,
+                           selected = shiny::isolate(input$eff_exposed) %||% glv[[2]]),
+        shiny::helpText("The other group becomes the reference the effects are measured against."))
+    })
+
+    output$tr_positive_ui <- shiny::renderUI({
+      shiny::req(identical(input$family, "trend"), input$tr_outcome)
+      olv <- levels(droplevels(as.factor(data()[[input$tr_outcome]])))
+      if (length(olv) != 2L)
+        return(shiny::div(class = "alert alert-warning", style = "padding:8px 10px;",
+          sprintf("A trend test needs a binary outcome; '%s' has %d observed values.",
+                  input$tr_outcome, length(olv))))
+      shiny::tagList(
+        shiny::selectInput(ns("tr_positive"), "Which outcome value is the EVENT?",
+                           choices = olv,
+                           selected = shiny::isolate(input$tr_positive) %||% olv[[2]]),
+        shiny::helpText("Levels are scored 1, 2, 3, ... in their existing order. If the categories are unequally spaced (age bands, say), the trend is still tested but 'linear' means linear in those ranks."))
+    })
+
+    output$dx_positive_ui <- shiny::renderUI({
+      shiny::req(identical(input$family, "diagnostic"), input$dx_test, input$dx_ref)
+      df <- data()
+      lv <- union(levels(as.factor(df[[input$dx_test]])),
+                  levels(as.factor(df[[input$dx_ref]])))
+      if (length(lv) != 2L)
+        return(shiny::div(class = "alert alert-warning", style = "padding:8px 10px;",
+          sprintf("The test and reference together show %d values (%s). A diagnostic evaluation needs exactly two - recode to positive/negative first.",
+                  length(lv), paste(utils::head(lv, 5), collapse = ", "))))
+      shiny::tagList(
+        shiny::selectInput(ns("dx_positive"), "Which value means POSITIVE?",
+                           choices = lv,
+                           selected = shiny::isolate(input$dx_positive) %||% lv[[2]]),
+        shiny::helpText("Getting this backwards swaps sensitivity and specificity, so it is asked rather than guessed."))
+    })
+
     # --- resolve a full spec -----------------------------------------------
     spec <- shiny::reactive({
       shiny::req(input$family)
@@ -493,11 +634,36 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
         list(family = "cochran_q", outcome = input$outcome,
              within = input$cochran_within, subject = input$subject,
              success = input$cochran_success)
+      } else if (input$family == "effects") {
+        shiny::req(input$eff_outcome, input$eff_group, input$eff_positive,
+                   input$eff_exposed)
+        list(family = "effects", outcome = input$eff_outcome,
+             group = input$eff_group, positive = input$eff_positive,
+             exposed = input$eff_exposed)
+      } else if (input$family == "trend") {
+        shiny::req(input$tr_outcome, input$tr_exposure, input$tr_positive)
+        list(family = "trend", outcome = input$tr_outcome,
+             exposure = input$tr_exposure, positive = input$tr_positive)
+      } else if (input$family == "diagnostic") {
+        shiny::req(input$dx_test, input$dx_ref, input$dx_positive)
+        list(family = "diagnostic", test = input$dx_test,
+             reference = input$dx_ref, positive = input$dx_positive)
       } else if (input$family == "point_biserial") {
         shiny::req(input$pb_binary, input$pb_numeric)
         list(family = "point_biserial", x = input$pb_binary, y = input$pb_numeric)
       } else if (input$family == "categorical") {
         cat_design <- input$cat_design %||% "association"
+        if (identical(cat_design, "agreement")) {
+          raters <- input$agree_raters %||% character(0)
+          if (length(raters) >= 3L)
+            return(list(family = "fleiss", raters = raters))
+          if (length(raters) == 2L)
+            return(list(family = "agreement", x = raters[[1]], y = raters[[2]],
+                        weights = input$kappa_weights %||% "unweighted"))
+          shiny::req(input$x, input$y)
+          return(list(family = "agreement", x = input$x, y = input$y,
+                      weights = input$kappa_weights %||% "unweighted"))
+        }
         if (identical(cat_design, "repeated_binary")) {
           shiny::req(input$outcome, input$cochran_within, input$subject)
           list(family = "cochran_q", outcome = input$outcome,
@@ -536,6 +702,35 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
                   s$primary, s$alt, s$why, followup)
       } else if (sp$family == "proportion") {
         "<b>Plan:</b> exact binomial test against the selected reference proportion, with a normal-approximation proportion test as a sensitivity analysis."
+      } else if (sp$family == "fleiss") {
+        paste0("<b>Plan:</b> Fleiss' kappa for how far the panel of ",
+               length(sp$raters), " raters agrees beyond chance, with a ",
+               "per-category breakdown showing which categories are applied ",
+               "inconsistently. The interval is bootstrapped over subjects, ",
+               "because the classic Fleiss standard error is derived under ",
+               "kappa = 0 and is too narrow otherwise.")
+      } else if (sp$family == "agreement") {
+        paste0("<b>Plan:</b> Cohen's kappa for how far the two measurements ",
+               "agree case by case beyond chance, with a confidence interval, ",
+               "and McNemar's test alongside it for whether one records the ",
+               "category more often overall. Agreement and association are ",
+               "different questions - kappa answers the first.")
+      } else if (sp$family == "effects") {
+        paste0("<b>Plan:</b> Risk in each group, then the risk difference ",
+               "(Newcombe interval), risk ratio, odds ratio and number needed ",
+               "to treat, with the chi-square or Fisher p-value. The odds ratio ",
+               "and risk ratio are both shown because they diverge when the ",
+               "outcome is common.")
+      } else if (sp$family == "trend") {
+        paste0("<b>Plan:</b> Cochran-Armitage test for a monotonic trend across ",
+               "the ordered levels, with the chi-square test alongside it so you ",
+               "can see what the ordering bought.")
+      } else if (sp$family == "diagnostic") {
+        paste0("<b>Plan:</b> Sensitivity, specificity, predictive values and ",
+               "likelihood ratios with Wilson confidence intervals, plus the ",
+               "predictive values recalculated across a range of prevalences. ",
+               "Sensitivity and specificity describe the test; PPV and NPV ",
+               "describe the test in a population.")
       } else if (sp$family == "cochran_q") {
         "<b>Plan:</b> Cochran's Q test for differences in a binary outcome across three or more matched conditions/time points. If significant, follow up with pairwise McNemar tests using multiplicity adjustment."
       } else if (sp$family == "point_biserial") {
@@ -551,11 +746,17 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
       shiny::HTML(msg)
     })
 
-    result <- shiny::eventReactive(input$run, {
+    # Held in a reactiveVal so a stale test result is dropped when the data
+    # changes (e.g. a level removed via the tab-0 Data contract), rather than
+    # lingering with values the data no longer contains.
+    fit_store <- shiny::reactiveVal(NULL)
+    shiny::observeEvent(input$run, {
       shiny::req(spec())
-      tryCatch(run_guided_test(prepare_test_data(data(), spec()), spec()),
-               error = function(e) list(error = conditionMessage(e)))
+      fit_store(tryCatch(run_guided_test(prepare_test_data(data(), spec()), spec()),
+                         error = function(e) list(error = conditionMessage(e))))
     })
+    shiny::observeEvent(data(), fit_store(NULL), ignoreInit = TRUE)
+    result <- shiny::reactive(fit_store())
 
     is_ok <- shiny::reactive(!is.null(result()) && is.null(result()$error))
 
@@ -610,19 +811,14 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
 
     output$assumptions <- shiny::renderUI({
       shiny::req(is_ok())
-      a <- result()$assumptions
-      if (length(a) == 0) return(shiny::tags$em("No formal assumption checks for this test."))
-      notes <- lapply(a, function(z) {
-        note <- if (!is.null(z$note)) z$note else if (!is.null(z$by_group)) z$note else ""
-        shiny::tags$li(note)
-      })
-      shiny::tags$ul(notes)
+      assumption_ui(result()$assumptions,
+                    empty = "No formal assumption checks for this test.")
     })
 
     output$rationale <- shiny::renderText({
       shiny::req(is_ok()); result()$rationale })
 
-    mod_interpret_server("interpret", shiny::reactive({
+    interp_payload <- shiny::reactive({
       if (!is_ok()) return(list())
       res <- result()
       tables <- list()
@@ -639,15 +835,21 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
            context = list(title = rec_label, analysis = "Hypothesis test",
                           method = res$recommended,
                           app_interpretation = res$rationale))
-    }), audit = audit)
+    })
+    interp <- mod_interpret_server("interpret", interp_payload, audit = audit)
 
     shiny::observeEvent(input$add, {
       shiny::req(is_ok())
       res <- result()
       cap <- sprintf("Hypothesis test: %s",
         if (res$recommended == "primary") res$primary$label else res$alternative$label)
+      p <- interp_payload()
+      ai <- if (length(p$tables %||% list()))
+        list(tables = p$tables, context = p$context,
+             interpretation = interp_reuse_text(interp$interpretation(), p$context))
+      else NULL
       add_report(list(kind = "table", caption = cap,
-                      data = result_to_df(res$primary)))
+                      data = result_to_df(res$primary), ai = ai))
       if (!is.null(res$alternative))
         add_report(list(kind = "table",
                         caption = paste("Alternative:", res$alternative$label),
@@ -656,11 +858,10 @@ mod_tests_server <- function(id, data, types, outcomes = NULL, panel = NULL,
         add_report(list(kind = "table",
                         caption = paste("Sensitivity analysis:", res$extra$label),
                         data = result_to_df(res$extra)))
-      if (!is.null(res$posthoc) && !is.null(res$posthoc$table) &&
-          nrow(res$posthoc$table) > 0)
-        add_report(list(kind = "table",
-                        caption = paste("Posthoc:", res$posthoc$label),
-                        data = res$posthoc$table))
+      # Post-hoc pairwise comparisons are not pasted as their own table in a
+      # publication-style report - a wall of pairwise rows is rarely reported in
+      # full. They still travel in the AI payload above (via interp_payload), so
+      # the prose write-up can call out the comparisons that matter.
       shiny::showNotification("Test results added to report.",
                               type = "message", duration = 3)
     })

@@ -96,6 +96,10 @@ prepare_outcome_data <- function(df, outcome, target_type, extra_vars = characte
     stop("A selected model variable is not present in the data.", call. = FALSE)
   out <- df
   out[[outcome]] <- coerce_outcome_vector(df[[outcome]], target_type, outcome)
+  # Defensive: drop unused factor levels on the model variables so a level that
+  # is present in the data's factor definition but has no observations (e.g. one
+  # excluded by a Data-contract rule) can never surface as a phantom model term.
+  for (v in vars) if (is.factor(out[[v]])) out[[v]] <- droplevels(out[[v]])
   list(data = out, outcome = outcome, target_type = target_type,
        rows = nrow(out), source_type = class(df[[outcome]])[1])
 }
